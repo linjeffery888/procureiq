@@ -1,0 +1,82 @@
+/* ProcureIQ design system. Ported from the approved design comp. The comp leans
+   on inline styles for layout, so this file carries only the base reset, the
+   font stacks, shared helper classes (.serif/.mono/.num), and the two route
+   animations. Per-surface layout lives inline in each page so the rendered app
+   matches the comp one-to-one. */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  color: #16202e;
+  background: #f5f6f7;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: #d6e8e0; }
+
+a { color: inherit; text-decoration: none; }
+
+button { font-family: inherit; cursor: pointer; }
+button:disabled { cursor: default; }
+input, select, textarea { font-family: inherit; }
+
+.serif { font-family: var(--heading-font, "Source Serif 4", Georgia, serif); }
+.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.num { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+@keyframes pq-spin { to { transform: rotate(360deg); } }
+@keyframes pq-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.pq-route { animation: pq-fade .26s ease both; }
+
+/* Indeterminate upload bar: a partial fill sweeps the track while the server
+   extracts text and no per-file count is available yet. */
+@keyframes pq-indeterminate {
+  0%   { left: -40%; width: 40%; }
+  50%  { left: 25%; width: 50%; }
+  100% { left: 100%; width: 40%; }
+}
+.pq-indeterminate { animation: pq-indeterminate 1.15s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .pq-indeterminate { animation: none; left: 0; width: 100%; opacity: .5; }
+}
+
+/* Dashboard flow diagram. A single dot travels the connector line, dwelling at
+   each of the four station dots (centers at 12.5 / 37.5 / 62.5 / 87.5 percent),
+   fading at the loop boundary so the jump back to the start is not seen. Each
+   station dot pulses as the traveling dot arrives, via a matched animation-delay
+   set inline on the node. Signals one record moving continuously through the
+   platform. */
+@keyframes pq-flow {
+  0%   { left: 12.5%; opacity: 0; }
+  5%   { left: 12.5%; opacity: 1; }
+  28%  { left: 37.5%; opacity: 1; }
+  34%  { left: 37.5%; opacity: 1; }
+  56%  { left: 62.5%; opacity: 1; }
+  62%  { left: 62.5%; opacity: 1; }
+  90%  { left: 87.5%; opacity: 1; }
+  96%  { left: 87.5%; opacity: 1; }
+  100% { left: 87.5%; opacity: 0; }
+}
+@keyframes pq-node-arrive {
+  0%   { box-shadow: 0 0 0 0 rgba(47,158,120,0); }
+  6%   { box-shadow: 0 0 0 8px rgba(47,158,120,.16); }
+  18%  { box-shadow: 0 0 0 0 rgba(47,158,120,0); }
+  100% { box-shadow: 0 0 0 0 rgba(47,158,120,0); }
+}
+.pq-flow-dot { animation: pq-flow 7s linear infinite; }
+.pq-flow-node { animation: pq-node-arrive 7s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pq-flow-dot { display: none; }
+  .pq-flow-node { animation: none; }
+}
+
+/* Hover affordances the comp expresses through its style-hover attribute. */
+.pq-card-hover { transition: border-color .15s, box-shadow .15s, transform .15s; }
+.pq-card-hover:hover { border-color: #cdd3db; box-shadow: 0 4px 14px rgba(20,30,45,.05); }
+.pq-menu-item { transition: background .12s; }
+.pq-menu-item:hover { background: #f5f8f7; }

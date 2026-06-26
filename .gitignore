@@ -1,0 +1,26 @@
+node_modules
+.next
+out
+tsconfig.tsbuildinfo
+.env.local
+.env*.local
+*.log
+.DS_Store
+next-env.d.ts
+
+# Generated Knowledge-module vector store (regenerated from SEED_PRECEDENTS).
+# Also where the local embedding model cache may land.
+data/corpus.json
+.model-cache
+
+# Persisted BudgetIQ upload queue (user-uploaded invoices + review decisions).
+data/uploads.json
+data/uploads.json.tmp
+
+# Persisted committed contract records (the ContractIQ -> BudgetIQ handoff).
+data/records.json
+data/records.json.tmp
+
+# Persisted finance actuals for the accrual / reforecast planner.
+data/budget-actuals.json
+data/budget-actuals.json.tmp
