@@ -16,6 +16,7 @@
 
 import { PurchaseOrder } from "./types";
 import { PURCHASE_ORDERS } from "./mockData";
+import { listAddedPos, listPoOverrides } from "./poOverridesStore";
 import registerData from "@/data/po_register.json";
 
 // Raw shape of a row in data/po_register.json (a superset of PurchaseOrder).
@@ -90,4 +91,116 @@ export function loadPurchaseOrders(dataset: PoDataset = "demo"): PurchaseOrder[]
 
 export function isPoDataset(v: unknown): v is PoDataset {
   return v === "demo" || v === "corpus" || v === "all";
+}
+
+// =====================================================================
+// PO REGISTER VIEW: the source of truth, made visible and editable
+// =====================================================================
+// The register is what every invoice is checked against, but it was headless
+// (no screen) and frozen (the seed never changed). These helpers surface it as
+// a maintainable list: reads overlay any human edits from the overrides store,
+// and the terms-policy flag activates the otherwise-dormant agreed_terms field
+// by measuring each PO against Iovance's standard net-payment-terms threshold.
+
+const RAW_REGISTER_ROWS: RegisterRow[] = (registerData as RegisterFile).purchaseOrders;
+
+// A full register row for the view: every stored field, plus whether a human has
+// edited it and whether its negotiated terms sit below the Iovance standard.
+export interface RegisterViewRow {
+  key: string;                 // stable identity: the seed PO number, or a created PO's id
+  isAdded: boolean;            // true for a reviewer-created PO (vs a seed row)
+  poNumber: string;            // the effective (override-applied) PO number
+  vendor: string;
+  workOrder: string;
+  sowRef: string;
+  contractValue: number;
+  spentToDate: number;
+  remaining: number;
+  agreedTerms: number;
+  status: string;
+  edited: boolean;             // a human override is applied (or the row is created)
+  updatedAt: string | null;    // when, if edited
+  updatedBy: string | null;    // who, if edited
+  termsBelowStandard: boolean; // agreedTerms shorter than the Net standard
+}
+
+// The register with overrides applied and the terms flag computed against
+// `minNetDays` (the same editable clause threshold the contract playbook uses,
+// so the standard is defined in exactly one place). Payment windows SHORTER than
+// the standard are the vendor-favorable deviation that strains cash timing.
+export async function getRegisterView(minNetDays: number): Promise<RegisterViewRow[]> {
+  const [overrides, added] = await Promise.all([listPoOverrides(), listAddedPos()]);
+
+  // Reviewer-created POs first, so a freshly sourced PO is at the top of the list.
+  const addedRows: RegisterViewRow[] = added.map((a) => ({
+    key: a.id,
+    isAdded: true,
+    poNumber: a.poNumber,
+    vendor: a.vendor,
+    workOrder: a.workOrder,
+    sowRef: a.sowRef,
+    contractValue: a.contractValue,
+    spentToDate: a.spentToDate,
+    remaining: a.remaining,
+    agreedTerms: a.agreedTerms,
+    status: a.status,
+    edited: true,
+    updatedAt: a.updatedAt,
+    updatedBy: a.updatedBy,
+    termsBelowStandard: typeof a.agreedTerms === "number" && a.agreedTerms < minNetDays,
+  }));
+
+  // Seed rows with any override fields overlaid. The override is keyed by the seed
+  // PO number even when it renames the PO, so the row's identity (`key`) is stable.
+  const seedRows: RegisterViewRow[] = RAW_REGISTER_ROWS.map((r) => {
+    const o = overrides[r.po_number];
+    const agreedTerms = o?.agreedTerms ?? r.agreed_terms;
+    return {
+      key: r.po_number,
+      isAdded: false,
+      poNumber: o?.poNumber ?? r.po_number,
+      vendor: o?.vendor ?? r.vendor_name,
+      workOrder: o?.workOrder ?? r.work_order,
+      sowRef: o?.sowRef ?? r.sow_ref,
+      contractValue: o?.contractValue ?? r.contract_value,
+      spentToDate: o?.spentToDate ?? r.spent_to_date,
+      remaining: o?.remaining ?? r.remaining,
+      agreedTerms,
+      status: o?.status ?? r.status,
+      edited: !!o,
+      updatedAt: o?.updatedAt ?? null,
+      updatedBy: o?.updatedBy ?? null,
+      termsBelowStandard: typeof agreedTerms === "number" && agreedTerms < minNetDays,
+    };
+  });
+
+  return [...addedRows, ...seedRows];
+}
+
+// The matcher loader that honors human edits: the selected dataset with any
+// override fields applied, PLUS the reviewer-created POs appended, so an edit to
+// a PO (or a brand-new PO) actually changes what the next invoice is checked
+// against. The created POs are matchable under every dataset.
+export async function loadPurchaseOrdersWithOverrides(dataset: PoDataset = "demo"): Promise<PurchaseOrder[]> {
+  const base = loadPurchaseOrders(dataset);
+  const [overrides, added] = await Promise.all([listPoOverrides(), listAddedPos()]);
+  const overridden: PurchaseOrder[] = base.map((po) => {
+    const o = overrides[po.poNumber];
+    if (!o) return po;
+    return {
+      poNumber: o.poNumber ?? po.poNumber,
+      vendor: o.vendor ?? po.vendor,
+      workOrder: o.workOrder ?? po.workOrder,
+      contractValue: o.contractValue ?? po.contractValue,
+      remaining: o.remaining ?? po.remaining,
+    };
+  });
+  const addedPos: PurchaseOrder[] = added.map((a) => ({
+    poNumber: a.poNumber,
+    vendor: a.vendor,
+    workOrder: a.workOrder,
+    contractValue: a.contractValue,
+    remaining: a.remaining,
+  }));
+  return [...overridden, ...addedPos];
 }

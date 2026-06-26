@@ -24,3 +24,29 @@ data/records.json.tmp
 # Persisted finance actuals for the accrual / reforecast planner.
 data/budget-actuals.json
 data/budget-actuals.json.tmp
+
+# Persisted last triage run (shown on load; triage runs only on the Run button).
+data/triage-result.json
+data/triage-result.json.tmp
+
+# Persisted human review dispositions (approve / manual correction) per invoice.
+data/decisions.json
+data/decisions.json.tmp
+
+# Cached live contract extractions, keyed by contract + thresholds + grounding.
+# Best-effort latency cache; regenerated on demand, never a source of truth.
+data/extract-cache.json
+data/extract-cache.json.tmp
+
+# Presentation / interview prep — author's private speaking material, not part of
+# the app. Kept local; never pushed to the shared repo.
+interview prep/
+PRESENTATION_DECK_REVIEW.md
+PRESENT_BACK_SCRIPT.md
+slide_*.png
+special_features_slide.png
+
+# Regenerable graphify artifacts (AST cache + dated backups). The curated graph
+# (graph.json / GRAPH_REPORT.md / wiki) is tracked; these are rebuilt on demand.
+graphify-out/cache/
+graphify-out/20*/

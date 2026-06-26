@@ -1,11 +1,13 @@
 "use client";
 
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { SAMPLE_CONTRACT, SAMPLE_CONTRACT_2, SAMPLE_CHANGE_ORDER } from "@/lib/mockData";
+import { SAMPLE_CONTRACT, SAMPLE_SAAS_RENEWAL, SAMPLE_PARENT_MSA, SAMPLE_CHANGE_ORDER } from "@/lib/mockData";
 import { ExtractionResponse, Severity, LinkStatus } from "@/lib/types";
 import { resolveContractFamilies } from "@/lib/contractLinking";
 import { postFilesWithProgress, UploadProgressState } from "@/lib/uploadClient";
+import { logAudit } from "@/lib/auditClient";
 import { useEngine } from "../components/engine";
+import { useReviewer } from "../components/reviewer";
 import { UploadProgress } from "../components/UploadProgress";
 
 // ContractIQ, first-pass contract review. Ported to the approved design comp: a
@@ -78,10 +80,24 @@ function linkStyle(status: LinkStatus): { bg: string; fg: string; label: string 
   }
 }
 
+// A changed-clause chip in the family summaries tags WHICH clause an amendment
+// moved, with a short hint of its new value. The full redline lives in the
+// opened review, so the chip stays compact: a long clause value (e.g. the whole
+// liability-cap sentence on the Apexion change order) would otherwise render as
+// one wide bar that runs back across its row. Take the first clause and cap it.
+function chipValue(found: string | null): string {
+  if (!found) return "";
+  let v = found.split(/[;,]/)[0].trim();
+  if (v.length > 28) v = v.slice(0, 28).replace(/\s+\S*$/, "").trimEnd() + "…";
+  else if (v.length < found.trim().length) v += "…";
+  return v;
+}
+
 const SAMPLES: { key: string; name: string; meta: string; text: string }[] = [
   { key: "cryologix", name: "CryoLogix MSA", meta: "24 mo · Net 15 · $480k", text: SAMPLE_CONTRACT },
-  { key: "helix", name: "Helix Analytics SaaS", meta: "36 mo · uncapped · no DPA", text: SAMPLE_CONTRACT_2 },
-  { key: "sentinel", name: "Sentinel change order", meta: "backdated · no precedence", text: SAMPLE_CHANGE_ORDER },
+  { key: "nimbus", name: "Nimbus SaaS renewal", meta: "Net 60 · capped · clean pass", text: SAMPLE_SAAS_RENEWAL },
+  { key: "apexion-msa", name: "Apexion MSA", meta: "Net 15 · uncapped · vendor owns IP", text: SAMPLE_PARENT_MSA },
+  { key: "apexion-co", name: "Apexion change order", meta: "links parent · remediates 3 clauses", text: SAMPLE_CHANGE_ORDER },
 ];
 
 const HANDOFF: { field: string; becomes: string }[] = [
@@ -94,7 +110,8 @@ const card: CSSProperties = { background: "#fff", border: "1px solid #e6e8ec", b
 const fieldLabel: CSSProperties = { fontSize: 10, color: "#9aa3b0", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 3 };
 
 export default function ContractReviewPage() {
-  const { forceOffline } = useEngine();
+  const { forceOffline, demoMode } = useEngine();
+  const { name: reviewer } = useReviewer();
 
   const [text, setText] = useState(SAMPLE_CONTRACT);
   const [sourceName, setSourceName] = useState("CryoLogix MSA");
@@ -103,6 +120,9 @@ export default function ContractReviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ExtractionResponse | null>(null);
   const [useKnowledge, setUseKnowledge] = useState(true);
+  // Demo override: force the live model even on contracts the deterministic gate
+  // would handle, so the live engine can be shown on a clean contract.
+  const [forceLive, setForceLive] = useState(false);
   const [dispositions, setDispositions] = useState<Record<string, Disposition>>({});
   const [committing, setCommitting] = useState(false);
   const [committed, setCommitted] = useState<string | null>(null);
@@ -118,6 +138,7 @@ export default function ContractReviewPage() {
   const [batchDone, setBatchDone] = useState(0);
   const [selectedBatchFile, setSelectedBatchFile] = useState<string | null>(null);
   const cancelBatchRef = useRef(false);
+  const demoRanRef = useRef(false);
 
   const fileRef = useRef<HTMLInputElement | null>(null);
   const folderRef = useRef<HTMLInputElement | null>(null);
@@ -129,6 +150,17 @@ export default function ContractReviewPage() {
     }
   }, []);
 
+  // Demo mode: first-pass all three bundled samples on entry so the batch
+  // summary (every flag / review / pass, with RAG grounding) is on screen in one
+  // click. Guarded per mount so it runs once on arrival.
+  useEffect(() => {
+    if (demoMode && !demoRanRef.current) {
+      demoRanRef.current = true;
+      reviewSamples();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoMode]);
+
   async function analyze() {
     setLoading(true);
     setError(null);
@@ -139,7 +171,7 @@ export default function ContractReviewPage() {
       const res = await fetch("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contractText: text, useKnowledge, forceOffline }),
+        body: JSON.stringify({ contractText: text, useKnowledge, forceOffline, forceLive }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Extraction failed");
@@ -182,7 +214,54 @@ export default function ContractReviewPage() {
           const res = await fetch("/api/extract", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contractText: item.text, useKnowledge, forceOffline }),
+            body: JSON.stringify({ contractText: item.text, useKnowledge, forceOffline, forceLive }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Extraction failed");
+          rows[my] = { ...rows[my], result: data, error: null };
+        } catch (e: any) {
+          rows[my] = { ...rows[my], result: null, error: e.message || "Review failed" };
+        }
+        completed++;
+        setBatchDone(completed);
+        setBatchRows(rows.map((r) => ({ ...r })));
+      }
+    };
+
+    const lanes = Math.min(4, items.length);
+    await Promise.all(Array.from({ length: lanes }, () => worker()));
+    setBatchBusy(false);
+  }
+
+  // One-click demo path: first-pass the three bundled samples at once (no upload
+  // needed) so the batch summary shows every pass / flag / review state side by
+  // side. Same bounded-concurrency worker as reviewAll, sourced from SAMPLES.
+  async function reviewSamples() {
+    cancelBatchRef.current = false;
+    setBatchBusy(true);
+    setBatchDone(0);
+    setSelectedBatchFile(null);
+    setResult(null);
+    setError(null);
+    setUploads([]);
+
+    const items = SAMPLES.map((s) => ({ fileName: s.name, text: s.text }));
+    const rows: BatchRow[] = items.map((u) => ({ fileName: u.fileName, text: u.text, result: null, error: null }));
+    setBatchRows(rows.map((r) => ({ ...r })));
+
+    let next = 0;
+    let completed = 0;
+    const worker = async () => {
+      while (true) {
+        if (cancelBatchRef.current) return;
+        const my = next++;
+        if (my >= items.length) return;
+        const item = items[my];
+        try {
+          const res = await fetch("/api/extract", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contractText: item.text, useKnowledge, forceOffline, forceLive }),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Extraction failed");
@@ -270,18 +349,35 @@ export default function ContractReviewPage() {
   }
 
   async function commit() {
-    if (!result) return;
+    if (!effective || !canCommit) return;
     setCommitting(true);
     setError(null);
     try {
       const res = await fetch("/api/records", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ extraction: result, sourceName }),
+        body: JSON.stringify({ extraction: effective, sourceName, clearance }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Commit failed");
-      setCommitted(data.record?.vendor ?? result.vendor ?? "record");
+      const committedVendor = data.record?.vendor ?? effective.vendor ?? "record";
+      setCommitted(committedVendor);
+      // Record the human touchpoint: a person committed this contract into the
+      // shared record. A clean pass crossed on the model's read; a flagged one
+      // is marked human-accepted with how many deviations the reviewer cleared.
+      const cleanPass = clearance.status === "clean-pass";
+      logAudit({
+        module: "ContractIQ",
+        action: "contract-committed",
+        surface: "Contract review",
+        actor: reviewer,
+        actionLabel: cleanPass ? "Committed (clean pass)" : "Committed (human-accepted)",
+        subject: committedVendor,
+        outcome: clearance.status,
+        detail: cleanPass
+          ? `First pass found no hard flags; committed on the engine's read. Source: ${sourceName}.`
+          : `${clearance.flags} flag(s) and ${clearance.reviews} review item(s); ${clearance.accepted} accepted and ${clearance.dismissed} dismissed before commit. Source: ${sourceName}.`,
+      });
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -305,22 +401,6 @@ export default function ContractReviewPage() {
     setDispositions((prev) => ({ ...prev, [key]: prev[key] === d ? (undefined as any) : d }));
   }
 
-  const flags = result?.findings.filter((f) => f.severity === "flag").length ?? 0;
-  const reviews = result?.findings.filter((f) => f.severity === "review").length ?? 0;
-  const clean = result?.findings.filter((f) => f.severity === "ok").length ?? 0;
-
-  const clauseFindings = result
-    ? [...result.findings]
-        .filter((f) => !CONSISTENCY_KEYS.has(f.termKey))
-        .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
-    : [];
-  const consistencyFindings = result ? result.findings.filter((f) => CONSISTENCY_KEYS.has(f.termKey)) : [];
-
-  const offline = result?._meta.engine === "offline-heuristic";
-  const retrieval = result?._meta.retrieval;
-  const reviewDisabled = loading || text.trim().length < 40;
-  const batchEligible = uploads.filter((u) => u.ok && u.text).length;
-
   // Contract-family linking. Once a batch is reviewed we know every document's
   // own Contract No. and the parent each amendment cites, so we can resolve the
   // families across the whole set: an amendment links to exactly the parent it
@@ -340,16 +420,67 @@ export default function ContractReviewPage() {
   // is tracked by sourceName.
   const activeUploadName = selectedBatchFile ?? sourceName;
 
-  const fields = result
+  // When the document on screen is a child amendment whose parent is in the set,
+  // the record that matters is the WHOLE family as amended, not the thin child.
+  // We evaluate, gate, and commit that merged unit so BudgetIQ receives the full
+  // agreement (parent governing law, liability, total value) with the change
+  // order's clauses overlaid. The parent's own view stays on its standalone
+  // terms, so a failing base agreement still reads as "needs renegotiation".
+  const activeFamily = linking?.families.find((f) => f.memberRowIds.includes(activeUploadName)) ?? null;
+  const viewingLinkedChild = !!activeFamily && !!activeFamily.parentRowId && activeFamily.childRowIds.includes(activeUploadName);
+  const effective = viewingLinkedChild && activeFamily ? activeFamily.mergedExtraction : result;
+
+  const flags = effective?.findings.filter((f) => f.severity === "flag").length ?? 0;
+  const reviews = effective?.findings.filter((f) => f.severity === "review").length ?? 0;
+  const clean = effective?.findings.filter((f) => f.severity === "ok").length ?? 0;
+
+  const clauseFindings = effective
+    ? [...effective.findings]
+        .filter((f) => !CONSISTENCY_KEYS.has(f.termKey))
+        .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
+    : [];
+  const consistencyFindings = effective ? effective.findings.filter((f) => CONSISTENCY_KEYS.has(f.termKey)) : [];
+
+  // Commit gate. The shared record is the handoff to BudgetIQ, so a contract
+  // should only cross over when it is a clean pass OR every open playbook flag /
+  // review has been explicitly dispositioned by a human. Net 15, vendor-owns-IP
+  // and the like must be accepted or dismissed first, not silently inherited
+  // downstream as if they were settled terms.
+  const openFindings = clauseFindings.filter((f) => f.severity === "flag" || f.severity === "review");
+  const undisposed = openFindings.filter((f) => !dispositions[f.termKey]);
+  const canCommit = !!effective && undisposed.length === 0;
+
+  // The clearance signal that travels with the record to BudgetIQ: a clean pass
+  // (no hard flags) crosses on the model's read alone; a flagged contract is
+  // marked human-accepted so downstream shows a person signed off on the
+  // deviations rather than inheriting them silently.
+  const flagCount = clauseFindings.filter((f) => f.severity === "flag").length;
+  const reviewCount = clauseFindings.filter((f) => f.severity === "review").length;
+  const acceptedCount = openFindings.filter((f) => dispositions[f.termKey] === "accepted").length;
+  const dismissedCount = openFindings.filter((f) => dispositions[f.termKey] === "dismissed").length;
+  const clearance = {
+    status: (flagCount > 0 ? "human-accepted" : "clean-pass") as "human-accepted" | "clean-pass",
+    flags: flagCount,
+    reviews: reviewCount,
+    accepted: acceptedCount,
+    dismissed: dismissedCount,
+  };
+
+  const offline = result?._meta.engine === "offline-heuristic";
+  const retrieval = result?._meta.retrieval;
+  const reviewDisabled = loading || text.trim().length < 40;
+  const batchEligible = uploads.filter((u) => u.ok && u.text).length;
+
+  const fields = effective
     ? [
-        { label: "Vendor", value: result.vendor ?? "–", mono: false },
-        { label: "Type", value: result.counterpartyType ?? "–", mono: false },
-        { label: "Total value", value: result.totalValue != null ? `$${result.totalValue.toLocaleString()}` : "–", mono: true },
-        { label: "Term", value: result.termMonths ? `${result.termMonths} months` : "–", mono: false },
-        { label: "Payment", value: result.paymentSchedule ?? "–", mono: false },
-        { label: "Auto-renewal", value: result.autoRenewal == null ? "–" : result.autoRenewal ? "Yes" : "No", mono: false },
-        { label: "Governing law", value: result.governingLaw ?? "–", mono: false },
-        { label: "Dates", value: `${result.startDate ?? "?"} to ${result.endDate ?? "?"}`, mono: true },
+        { label: "Vendor", value: effective.vendor ?? "–", mono: false },
+        { label: "Type", value: effective.counterpartyType ?? "–", mono: false },
+        { label: "Total value", value: effective.totalValue != null ? `$${effective.totalValue.toLocaleString()}` : "–", mono: true },
+        { label: "Term", value: effective.termMonths ? `${effective.termMonths} months` : "–", mono: false },
+        { label: "Payment", value: effective.paymentSchedule ?? "–", mono: false },
+        { label: "Auto-renewal", value: effective.autoRenewal == null ? "–" : effective.autoRenewal ? "Yes" : "No", mono: false },
+        { label: "Governing law", value: effective.governingLaw ?? "–", mono: false },
+        { label: "Dates", value: `${effective.startDate ?? "?"} to ${effective.endDate ?? "?"}`, mono: true },
       ]
     : [];
 
@@ -453,6 +584,22 @@ export default function ContractReviewPage() {
               <div>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: "#1f2a38" }}>Ground in Iovance precedent</div>
                 <div style={{ fontSize: 11, color: "#8893a2", lineHeight: 1.4 }}>Retrieve top precedents from Knowledge as evidence.</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ ...card, padding: "15px 18px", opacity: forceOffline ? 0.55 : 1 }}>
+            <div onClick={() => { if (!forceOffline) setForceLive((v) => !v); }} style={{ display: "flex", alignItems: "center", gap: 11, cursor: forceOffline ? "default" : "pointer" }}>
+              <div style={{ width: 36, height: 21, borderRadius: 11, background: forceLive && !forceOffline ? "var(--accent)" : "#d4d9e0", position: "relative", flexShrink: 0, transition: "background .15s" }}>
+                <div style={{ width: 17, height: 17, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: forceLive && !forceOffline ? 17 : 2, transition: "left .15s", boxShadow: "0 1px 2px rgba(0,0,0,.2)" }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "#1f2a38" }}>Force live AI</div>
+                <div style={{ fontSize: 11, color: "#8893a2", lineHeight: 1.4 }}>
+                  {forceOffline
+                    ? "Engine is set to Offline; switch it to Live to use this."
+                    : "Run the model on every contract, skipping the cache and the low-confidence gate."}
+                </div>
               </div>
             </div>
           </div>
@@ -580,9 +727,10 @@ export default function ContractReviewPage() {
                               ) : (
                                 changed.map((f) => {
                                   const cs = sevStyle(f.severity);
+                                  const v = chipValue(f.found);
                                   return (
-                                    <span key={f.termKey} style={{ padding: "2px 7px", borderRadius: 5, fontSize: 9.5, fontWeight: 600, background: cs.sevBg, color: cs.sevFg, whiteSpace: "nowrap" }}>
-                                      {f.label}{f.found ? ` → ${f.found}` : ""}
+                                    <span key={f.termKey} title={f.found ? `${f.label} → ${f.found}` : f.label} style={{ padding: "2px 7px", borderRadius: 5, fontSize: 9.5, fontWeight: 600, background: cs.sevBg, color: cs.sevFg, whiteSpace: "nowrap", maxWidth: "100%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                                      {f.label}{v ? ` → ${v}` : ""}
                                     </span>
                                   );
                                 })
@@ -767,9 +915,10 @@ export default function ContractReviewPage() {
                           ) : (
                             changed.map((f) => {
                               const cs = sevStyle(f.severity);
+                              const v = chipValue(f.found);
                               return (
-                                <span key={f.termKey} style={{ padding: "3px 9px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: cs.sevBg, color: cs.sevFg }}>
-                                  {f.label}{f.found ? ` → ${f.found}` : ""}
+                                <span key={f.termKey} title={f.found ? `${f.label} → ${f.found}` : f.label} style={{ padding: "3px 9px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: cs.sevBg, color: cs.sevFg, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {f.label}{v ? ` → ${v}` : ""}
                                 </span>
                               );
                             })
@@ -946,7 +1095,15 @@ export default function ContractReviewPage() {
               <div style={{ ...card, padding: 18, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18 }}>
                 <div>
                   <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1f2a38", marginBottom: 3 }}>Commit to the shared record</div>
-                  <div style={{ fontSize: 12, color: "#8893a2" }}>Writes the ContractExtraction record that BudgetIQ reads. Production stays modular against the legal DMS / Oro.</div>
+                  <div style={{ fontSize: 12, color: "#8893a2", marginBottom: 10 }}>Writes the ContractExtraction record that BudgetIQ reads. Production stays modular against the legal DMS / Oro.</div>
+                  {canCommit && (
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "4px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: clearance.status === "human-accepted" ? "#fdf3e3" : "#e9f4ef", color: clearance.status === "human-accepted" ? "#9a6b1a" : "#1f7a5a", border: `1px solid ${clearance.status === "human-accepted" ? "#f0e0c2" : "#cfe3d8"}` }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: clearance.status === "human-accepted" ? "#c98a2a" : "#2f9e78" }} />
+                      {clearance.status === "human-accepted"
+                        ? `Will cross as human-accepted · ${clearance.accepted} of ${flagCount + reviewCount} cleared by a person`
+                        : "Will cross as a clean pass"}
+                    </div>
+                  )}
                 </div>
                 {committed ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "11px 16px", borderRadius: 9, background: "#e9f4ef", border: "1px solid #cfe3d8" }}>
@@ -954,9 +1111,21 @@ export default function ContractReviewPage() {
                     <div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#1f7a5a" }}>Committed to shared record</div><div style={{ fontSize: 11, color: "#3f7a64" }}>{committed}</div></div>
                   </div>
                 ) : (
-                  <button onClick={commit} disabled={committing} style={{ padding: "12px 22px", borderRadius: 9, border: "none", background: committing ? "#9aa3b0" : "var(--navy)", color: "#fff", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
-                    {committing ? "Committing…" : "Commit record"}
-                  </button>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 7 }}>
+                    <button
+                      onClick={commit}
+                      disabled={committing || !canCommit}
+                      title={canCommit ? "Commit the reviewed record to BudgetIQ" : "Disposition every flag and review first"}
+                      style={{ padding: "12px 22px", borderRadius: 9, border: "none", background: committing || !canCommit ? "#c2c8d0" : "var(--navy)", color: "#fff", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", cursor: committing || !canCommit ? "not-allowed" : "pointer" }}
+                    >
+                      {committing ? "Committing…" : "Commit record"}
+                    </button>
+                    {!canCommit && (
+                      <div style={{ fontSize: 11, color: "#b07a1a", textAlign: "right", maxWidth: 240, lineHeight: 1.45 }}>
+                        {undisposed.length} open {undisposed.length === 1 ? "finding needs" : "findings need"} a human decision before this record can cross to BudgetIQ.
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </>

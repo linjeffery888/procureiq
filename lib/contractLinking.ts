@@ -49,6 +49,7 @@ export interface ContractFamily {
   memberRowIds: string[];            // parent first, then children in chronological order
   childRowIds: string[];             // children only
   mergedFindings: PlaybookFinding[]; // unit evaluation: parent baseline, changed clauses overlaid
+  mergedExtraction: ContractExtraction; // the whole agreement as amended: what crosses to BudgetIQ
   unitFlagCount: number;
   unitReviewCount: number;
   parentMissing: boolean;            // a child cites a parent that is not in the set
@@ -242,6 +243,7 @@ function buildFamilies(
     const parentRowId = rootIsBase ? rootRowId : null;
 
     const mergedFindings = mergeFamilyFindings(root, children);
+    const mergedExtraction = mergeFamilyExtraction(root, children, mergedFindings);
     families.push({
       key: root.extraction.contractId || rootRowId,
       parentRowId,
@@ -251,6 +253,7 @@ function buildFamilies(
       memberRowIds: [rootRowId, ...children.map((c) => c.rowId)],
       childRowIds: children.map((c) => c.rowId),
       mergedFindings,
+      mergedExtraction,
       unitFlagCount: mergedFindings.filter((f) => f.severity === "flag").length,
       unitReviewCount: mergedFindings.filter((f) => f.severity === "review").length,
       parentMissing,
@@ -280,6 +283,65 @@ function mergeFamilyFindings(root: LinkableDoc, children: LinkableDoc[]): Playbo
     }
   }
   return [...merged.values()].map((m) => m.finding);
+}
+
+// The family's effective extraction: the parent's full record as the baseline,
+// with each child's ASSERTED scalar fields and clause findings overlaid in
+// chronological order (newest amendment wins). This is what crosses to BudgetIQ,
+// so the downstream record reflects the whole agreement as amended (parent
+// governing law, liability, total value, plus the change order's Net 60), not
+// just the thin change order that, read alone, looks empty.
+function mergeFamilyExtraction(
+  root: LinkableDoc,
+  children: LinkableDoc[],
+  mergedFindings: PlaybookFinding[],
+): ContractExtraction {
+  const base = root.extraction;
+
+  // A scalar field takes the newest child value that is actually present;
+  // otherwise it keeps the parent's. Children are already in chronological order.
+  function scalar<K extends keyof ContractExtraction>(key: K): ContractExtraction[K] {
+    let val = base[key];
+    for (const c of children) {
+      const cv = c.extraction[key];
+      if (cv !== null && cv !== undefined) val = cv;
+    }
+    return val;
+  }
+
+  // Merge the display terms by key: parent terms first, a child term overrides
+  // only when it carries a value.
+  const termsByKey = new Map<string, ContractExtraction["terms"][number]>();
+  for (const t of base.terms) termsByKey.set(t.key, t);
+  for (const c of children) {
+    for (const t of c.extraction.terms) {
+      if (t.value != null && t.value !== "") termsByKey.set(t.key, t);
+      else if (!termsByKey.has(t.key)) termsByKey.set(t.key, t);
+    }
+  }
+
+  const flags = mergedFindings.filter((f) => f.severity === "flag").length;
+  const reviews = mergedFindings.filter((f) => f.severity === "review").length;
+  const vendor = scalar("vendor");
+  const n = children.length;
+
+  return {
+    vendor,
+    counterpartyType: base.counterpartyType,
+    totalValue: scalar("totalValue"),
+    currency: scalar("currency"),
+    startDate: scalar("startDate"),
+    endDate: scalar("endDate"),
+    termMonths: scalar("termMonths"),
+    paymentSchedule: scalar("paymentSchedule"),
+    autoRenewal: scalar("autoRenewal"),
+    governingLaw: scalar("governingLaw"),
+    terms: [...termsByKey.values()],
+    findings: mergedFindings,
+    summary: `${vendor ?? "This agreement"}: effective terms after ${n} amendment${n === 1 ? "" : "s"}. Unit review found ${flags} item(s) to escalate and ${reviews} to confirm.`,
+    contractId: base.contractId,
+    parentReference: base.parentReference,
+  };
 }
 
 function titleOf(d: LinkableDoc): string | null {

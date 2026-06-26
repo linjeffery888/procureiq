@@ -4,6 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CorpusLabel, CorpusStatus, RetrievedPrecedent } from "@/lib/types";
 import { postFilesWithProgress, UploadProgressState } from "@/lib/uploadClient";
 import { UploadProgress } from "../components/UploadProgress";
+import {
+  ClauseThresholds,
+  ThresholdKey,
+  DEFAULT_THRESHOLDS,
+  THRESHOLD_FIELDS,
+  PRESENCE_RULES,
+} from "@/lib/clauseThresholds";
+import { logAudit } from "@/lib/auditClient";
+import { useReviewer } from "../components/reviewer";
 
 // The Knowledge module, ported to the approved comp: the precedent corpus that
 // grounds ContractIQ. It shows the index status, ingests new precedents from
@@ -176,6 +185,7 @@ function pillStyle(label: CorpusLabel): { bg: string; fg: string } {
 }
 
 export default function KnowledgePage() {
+  const { name: reviewer } = useReviewer();
   const [status, setStatus] = useState<CorpusStatus | null>(null);
   const [docs, setDocs] = useState<DocRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -213,6 +223,15 @@ export default function KnowledgePage() {
   // Expanded corpus row
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
 
+  // Editable clause thresholds: the deterministic engine's numeric knobs. The
+  // saved set is what is in force; the draft is what the editor is moving. Saving
+  // re-labels the on-file precedents (the API returns how many flipped) and
+  // governs every future upload.
+  const [thresholds, setThresholds] = useState<ClauseThresholds>(DEFAULT_THRESHOLDS);
+  const [thresholdDraft, setThresholdDraft] = useState<ClauseThresholds>(DEFAULT_THRESHOLDS);
+  const [thresholdSaving, setThresholdSaving] = useState(false);
+  const [thresholdMsg, setThresholdMsg] = useState<string | null>(null);
+
   useEffect(() => {
     if (folderRef.current) {
       folderRef.current.setAttribute("webkitdirectory", "");
@@ -237,6 +256,85 @@ export default function KnowledgePage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Pull the thresholds in force on mount so the editor opens on the saved set,
+  // not the shipped defaults. Best-effort: a failed read keeps the defaults.
+  const loadThresholds = useCallback(async () => {
+    try {
+      const res = await fetch("/api/thresholds");
+      const data = await res.json();
+      if (res.ok && data.thresholds) {
+        setThresholds(data.thresholds);
+        setThresholdDraft(data.thresholds);
+      }
+    } catch {
+      // keep DEFAULT_THRESHOLDS
+    }
+  }, []);
+
+  useEffect(() => {
+    loadThresholds();
+  }, [loadThresholds]);
+
+  function setThresholdField(key: ThresholdKey, value: number) {
+    setThresholdMsg(null);
+    setThresholdDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Stage the shipped defaults; still requires Save to commit, so there is one
+  // write path and the corpus only re-labels on an explicit save.
+  function resetThresholds() {
+    setThresholdMsg(null);
+    setThresholdDraft({ ...DEFAULT_THRESHOLDS });
+  }
+
+  // Persist the draft, then reflect the re-labeled corpus the API returns. One
+  // save is one auditable human touchpoint: it changes how the engine judges
+  // paper, so it is logged with the before/after of every changed knob.
+  async function saveThresholds() {
+    setThresholdSaving(true);
+    setThresholdMsg(null);
+    setError(null);
+    const prev = thresholds;
+    try {
+      const res = await fetch("/api/thresholds", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thresholds: thresholdDraft }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save thresholds");
+      const saved: ClauseThresholds = data.thresholds;
+      setThresholds(saved);
+      setThresholdDraft(saved);
+      if (data.status) setStatus(data.status);
+      await refresh(); // pull the re-labeled corpus rows into the list below
+      const changed: number = data.changed ?? 0;
+      setThresholdMsg(
+        changed > 0
+          ? `Saved. ${changed} on-file precedent${changed === 1 ? "" : "s"} re-labeled against the new thresholds.`
+          : "Saved. No on-file precedent changed label under the new thresholds."
+      );
+      const diffs = THRESHOLD_FIELDS.filter((f) => prev[f.key] !== saved[f.key]).map((f) => {
+        const fmt = (n: number) => (f.unit === "USD" ? `$${n.toLocaleString("en-US")}` : `${n} ${f.unit}`);
+        return `${f.clauseLabel}: ${fmt(prev[f.key])} to ${fmt(saved[f.key])}`;
+      });
+      logAudit({
+        module: "ContractIQ",
+        action: "thresholds-changed",
+        surface: "Knowledge / Rules & thresholds",
+        actor: reviewer,
+        actionLabel: "Adjusted clause thresholds",
+        subject: diffs.length ? `${diffs.length} clause threshold${diffs.length === 1 ? "" : "s"}` : "Clause thresholds",
+        outcome: changed > 0 ? "corpus-relabeled" : "saved",
+        detail: `${diffs.length ? diffs.join("; ") : "No numeric change"}. ${changed} on-file precedent(s) re-labeled.`,
+      });
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setThresholdSaving(false);
+    }
+  }
 
   async function post(body: any): Promise<any> {
     const res = await fetch("/api/corpus", {
@@ -577,6 +675,10 @@ export default function KnowledgePage() {
     cursor: "pointer",
   };
 
+  // Threshold editor state: is the draft unsaved, and is it already the default?
+  const thresholdsDirty = THRESHOLD_FIELDS.some((f) => thresholdDraft[f.key] !== thresholds[f.key]);
+  const draftIsDefault = THRESHOLD_FIELDS.every((f) => thresholdDraft[f.key] === DEFAULT_THRESHOLDS[f.key]);
+
   return (
     <div className="pq-route">
       {/* Header */}
@@ -657,6 +759,94 @@ export default function KnowledgePage() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Rules & thresholds — the deterministic engine's editable numeric knobs.
+          Saving re-labels the on-file precedents below (the API reports how many
+          flipped) and governs every future upload. Presence rules sit alongside
+          read-only so the reviewer sees the whole rule set, tunable or not. */}
+      <div style={{ background: "#fff", border: "1px solid #e6e8ec", borderRadius: 10, padding: 20, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: "#1f2a38" }}>Rules &amp; thresholds</div>
+            <div style={{ fontSize: 11.5, color: "#9aa3b0", marginTop: 3, maxWidth: 600, lineHeight: 1.5 }}>
+              The numeric boundaries the deterministic engine compares every contract against. Move a knob and save: the on-file precedents below are re-labeled against the new line, and every future upload is judged by it.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 9, flexShrink: 0 }}>
+            <button
+              onClick={resetThresholds}
+              disabled={thresholdSaving || draftIsDefault}
+              style={{ ...ghostBtn, opacity: thresholdSaving || draftIsDefault ? 0.5 : 1 }}
+            >
+              Reset to defaults
+            </button>
+            <button
+              onClick={saveThresholds}
+              disabled={thresholdSaving || !thresholdsDirty}
+              style={{ ...navyBtn, opacity: thresholdSaving || !thresholdsDirty ? 0.55 : 1 }}
+            >
+              {thresholdSaving ? "Saving…" : "Save thresholds"}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 16 }}>
+          {THRESHOLD_FIELDS.map((f) => {
+            const v = thresholdDraft[f.key];
+            const changed = v !== thresholds[f.key];
+            const display = f.unit === "USD" ? `$${v.toLocaleString("en-US")}` : `${v} ${f.unit}`;
+            return (
+              <div
+                key={f.key}
+                style={{
+                  border: `1px solid ${changed ? "#cfdcea" : "#eef0f3"}`,
+                  borderRadius: 9,
+                  padding: "13px 15px",
+                  background: changed ? "#f7fafd" : "#fafbfc",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: "#2a3645" }}>{f.label}</div>
+                  <span style={{ fontSize: 9.5, fontWeight: 600, padding: "2px 7px", borderRadius: 5, background: "#eef1f6", color: "#5a7290", whiteSpace: "nowrap" }}>{f.clauseLabel}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 11, marginTop: 11 }}>
+                  <input
+                    type="range"
+                    min={f.min}
+                    max={f.max}
+                    step={f.step}
+                    value={v}
+                    onChange={(e) => setThresholdField(f.key, Number(e.target.value))}
+                    style={{ flex: 1, accentColor: "#1f3a5f", cursor: "pointer" }}
+                  />
+                  <div className="num" style={{ fontSize: 13.5, fontWeight: 600, color: "#16202e", minWidth: 92, textAlign: "right" }}>{display}</div>
+                </div>
+                <div style={{ fontSize: 11, color: changed ? "#2e6da4" : "#7a8493", marginTop: 9, lineHeight: 1.45 }}>{f.rule(v)}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ marginTop: 18 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".5px", textTransform: "uppercase", color: "#9aa3b0", marginBottom: 9 }}>
+            Presence rules · no number to tune
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {PRESENCE_RULES.map((r) => (
+              <div key={r.clauseTag} style={{ border: "1px solid #eef0f3", borderRadius: 8, padding: "10px 13px", background: "#fbfcfd" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#2a3645", marginBottom: 3 }}>{r.clauseLabel}</div>
+                <div style={{ fontSize: 10.5, color: "#7a8493", lineHeight: 1.5 }}>{r.rule}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {(thresholdMsg || thresholdsDirty) && (
+          <div style={{ marginTop: 16, fontSize: 11.5, fontWeight: 500, color: thresholdMsg ? "#1f7a5a" : "#b5762a" }}>
+            {thresholdMsg || "Unsaved changes. Save to re-label the corpus and apply the new line to future uploads."}
+          </div>
+        )}
       </div>
 
       {/* Eval band */}
@@ -802,7 +992,9 @@ export default function KnowledgePage() {
                     <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 8 }}>
                       <span style={{ padding: "2px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600, background: pill.bg, color: pill.fg }}>{p.label}</span>
                       <span style={{ fontSize: 12, fontWeight: 600, color: "#2a3645", flex: 1 }}>{p.title}</span>
-                      <span className="num" style={{ fontSize: 11.5, color: "#6a7484", fontWeight: 600 }}>{pct}%</span>
+                      <span className="num" style={{ fontSize: 11.5, color: "#6a7484", fontWeight: 600, whiteSpace: "nowrap" }}>
+                        {pct}% <span style={{ fontWeight: 500, color: "#9aa3b0" }}>relevance</span>
+                      </span>
                     </div>
                     <div style={{ height: 5, borderRadius: 3, background: "#eef0f3", overflow: "hidden", marginBottom: 8 }}>
                       <div style={{ height: "100%", width: `${pct}%`, background: "var(--accent,#2f9e78)", borderRadius: 3 }} />

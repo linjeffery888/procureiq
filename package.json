@@ -4,9 +4,10 @@
   "private": true,
   "description": "ProcureIQ: one platform, one shared contract record, two modules (ContractIQ + BudgetIQ). Internal procurement intelligence for Iovance IT. Prototype on synthetic data.",
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.js",
     "build": "next build",
     "start": "next start",
+    "demo": "node scripts/serve.js",
     "lint": "next lint"
   },
   "dependencies": {
@@ -18,7 +19,8 @@
     "pdf-parse": "^1.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "unpdf": "^1.6.2"
+    "unpdf": "^1.6.2",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",

@@ -56,8 +56,8 @@ export const PLAYBOOK: PlaybookRule[] = [
     key: "data_privacy",
     label: "Data processing addendum (DPA)",
     whatToCheck: "For vendors that touch sensitive data: is there a DPA, and does it cover security, subcontractors, and breach recourse.",
-    acceptable: "DPA in place: vendor secures data to Iovance standards (encryption, etc.), discloses any subcontractors or third parties that process the data, and defines Iovance's recourse on a breach.",
-    escalateIf: "Sensitive data processed with no DPA, or a DPA missing subcontractor disclosure or breach recourse.",
+    acceptable: "A substantive DPA is in place (in the body or attached as an exhibit): vendor secures data to Iovance standards (encryption, etc.), discloses any subcontractors or third parties that process the data, and defines Iovance's recourse on a breach.",
+    escalateIf: "Sensitive data processed with no DPA, or a DPA missing subcontractor disclosure or breach recourse. A section merely TITLED 'Data Processing Agreement' that only promises 'reasonable security measures' with no subprocessor disclosure or breach-notification terms is a stub, not a DPA, and must be treated as missing.",
     confirmed: true,
   },
   {

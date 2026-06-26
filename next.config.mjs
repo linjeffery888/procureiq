@@ -12,6 +12,7 @@ const nextConfig = {
       "pdf-parse",
       "unpdf",
       "mammoth",
+      "xlsx",
     ],
   },
 };

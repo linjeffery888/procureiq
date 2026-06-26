@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import { EngineProvider } from "./components/engine";
+import { ReviewerProvider } from "./components/reviewer";
 import Shell from "./components/Shell";
 
 export const metadata: Metadata = {
@@ -22,7 +23,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <EngineProvider>
-          <Shell>{children}</Shell>
+          <ReviewerProvider>
+            <Shell>{children}</Shell>
+          </ReviewerProvider>
         </EngineProvider>
       </body>
     </html>

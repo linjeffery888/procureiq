@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useState } from "react";
 import { useEngine } from "./engine";
+import { useReviewer } from "./reviewer";
 
 // The single ProcureIQ shell: top bar (logo + nav + Engine toggle), the
 // synthetic-data band, and the bounded main column. One shell, two modules
@@ -30,9 +31,11 @@ const NAV: NavItem[] = [
     label: "BudgetIQ",
     children: [
       { href: "/invoice-matching", label: "Invoice Check" },
+      { href: "/po-register", label: "PO Register" },
       { href: "/financial-planning", label: "Budget Planning" },
     ],
   },
+  { href: "/audit", label: "Audit Trail" },
   { href: "/impact", label: "Impact" },
 ];
 
@@ -42,10 +45,36 @@ function isActive(pathname: string, href: string): boolean {
 
 export default function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { engine, setEngine } = useEngine();
+  const router = useRouter();
+  const { engine, setEngine, demoMode, startDemo, exitDemo } = useEngine();
+  const { name: reviewer, ready: reviewerReady, setName: setReviewer } = useReviewer();
   const live = engine === "live";
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
+
+  // The identity gate. It blocks on first load until a name is set (so the audit
+  // trail can never log an unsigned decision), and the top-bar chip reopens it in
+  // editable form to switch reviewer. `editing` is the "name already set, user
+  // chose to change it" case; the initial gate (no name yet) is not cancelable.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const showGate = reviewerReady && (!reviewer || editing);
+  const gateIsBlocking = reviewerReady && !reviewer;
+
+  function openReviewerEdit() {
+    setDraft(reviewer);
+    setEditing(true);
+  }
+  function submitReviewer() {
+    const v = draft.trim();
+    if (!v) return;
+    setReviewer(v);
+    setEditing(false);
+  }
+  function cancelReviewerEdit() {
+    if (gateIsBlocking) return; // initial gate cannot be dismissed without a name
+    setEditing(false);
+  }
 
   return (
     <div
@@ -177,7 +206,33 @@ export default function Shell({ children }: { children: ReactNode }) {
             })}
           </nav>
 
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9 }}>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+            {/* One-click demo: selects the live engine and auto-runs each
+                module's batch on entry, so every pass / flag / review state is on
+                screen without manual loading. Starts on ContractIQ. */}
+            {demoMode ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 6, background: "var(--navy)", color: "#fff", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#5fd0a0" }} />
+                  Demo mode
+                </span>
+                <button
+                  onClick={exitDemo}
+                  style={{ padding: "5px 10px", fontSize: 12, fontWeight: 600, background: "#fff", color: "#7a8493", border: "1px solid #e0e3e8", borderRadius: 7, cursor: "pointer" }}
+                >
+                  Exit
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => { startDemo(); router.push("/contract-review"); }}
+                title="Run the live engine and auto-run every module so all states are visible"
+                style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: "var(--navy)", color: "#fff", border: "none", borderRadius: 7, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}
+              >
+                <span style={{ fontSize: 9 }}>&#9654;</span> Run demo
+              </button>
+            )}
+            <span style={{ width: 1, height: 22, background: "#e6e8ec" }} />
             <span style={{ fontSize: 10, color: "#9aa3b0", textTransform: "uppercase", letterSpacing: ".6px", fontWeight: 600 }}>Engine</span>
             <div style={{ display: "flex", border: "1px solid #e0e3e8", borderRadius: 7, overflow: "hidden" }}>
               <button
@@ -193,6 +248,28 @@ export default function Shell({ children }: { children: ReactNode }) {
                 <span style={{ width: 6, height: 6, borderRadius: "50%", background: !live ? "#9aa3b0" : "#cdd3db" }} />Offline
               </button>
             </div>
+
+            {/* Reviewer identity. Set once via the start-of-session gate, shown
+                here on every surface, and signed onto every audit event. Click to
+                switch who is reviewing. */}
+            {reviewer && (
+              <>
+                <span style={{ width: 1, height: 22, background: "#e6e8ec" }} />
+                <button
+                  onClick={openReviewerEdit}
+                  title="Change who is reviewing this session"
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 10px 4px 5px", background: "#fff", border: "1px solid #e0e3e8", borderRadius: 8, cursor: "pointer", whiteSpace: "nowrap" }}
+                >
+                  <span style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--navy)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, fontWeight: 700 }}>
+                    {reviewer.trim().charAt(0).toUpperCase()}
+                  </span>
+                  <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.15, alignItems: "flex-start" }}>
+                    <span style={{ fontSize: 9, color: "#9aa3b0", textTransform: "uppercase", letterSpacing: ".5px", fontWeight: 600 }}>Reviewer</span>
+                    <span style={{ fontSize: 12.5, color: "#16202e", fontWeight: 600 }}>{reviewer}</span>
+                  </span>
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -208,6 +285,63 @@ export default function Shell({ children }: { children: ReactNode }) {
       <main style={{ flex: 1, maxWidth: 1260, width: "100%", margin: "0 auto", padding: "32px 28px 80px" }}>
         {children}
       </main>
+
+      {/* Identity gate. On first load it blocks the surface until a name is set,
+          so no human decision is ever logged unsigned; reopened from the top-bar
+          chip it is a cancelable "switch reviewer" dialog. */}
+      {showGate && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={cancelReviewerEdit}
+          style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(22,32,46,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 430, background: "#fff", borderRadius: 14, boxShadow: "0 24px 60px rgba(22,32,46,.28)", padding: 28 }}
+          >
+            <h2 className="serif" style={{ margin: 0, fontSize: 20, fontWeight: 600, color: "#16202e", letterSpacing: "-.2px" }}>
+              {gateIsBlocking ? "Who's reviewing today?" : "Change reviewer"}
+            </h2>
+            <p style={{ margin: "8px 0 18px", fontSize: 13.5, lineHeight: 1.5, color: "#6a7484" }}>
+              Your name signs every decision you make this session. Each committed
+              contract, invoice approval or override, and budget change is recorded
+              on the audit trail under it. It is kept for this session only.
+            </p>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".5px", color: "#9aa3b0", marginBottom: 6 }}>
+              Your name
+            </label>
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitReviewer();
+                if (e.key === "Escape") cancelReviewerEdit();
+              }}
+              placeholder="e.g. Jane Lin"
+              style={{ width: "100%", boxSizing: "border-box", padding: "11px 13px", fontSize: 14, border: "1px solid #d8dce2", borderRadius: 9, outline: "none", color: "#16202e" }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+              {!gateIsBlocking && (
+                <button
+                  onClick={cancelReviewerEdit}
+                  style={{ padding: "9px 16px", fontSize: 13, fontWeight: 600, background: "#fff", color: "#7a8493", border: "1px solid #e0e3e8", borderRadius: 8, cursor: "pointer" }}
+                >
+                  Cancel
+                </button>
+              )}
+              <button
+                onClick={submitReviewer}
+                disabled={!draft.trim()}
+                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 600, background: draft.trim() ? "var(--accent)" : "#cfd5dc", color: "#fff", border: "none", borderRadius: 8, cursor: draft.trim() ? "pointer" : "not-allowed" }}
+              >
+                {gateIsBlocking ? "Start reviewing" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

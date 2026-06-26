@@ -209,6 +209,16 @@ export interface TriageResponse {
   meta: TriageMeta;
 }
 
+// The last triage run, persisted to disk so it survives a restart and the page
+// can show it without re-running. `batchKey` is the signature of the batch it ran
+// against (see lib/triageKey.ts); the UI compares it to the current batch to flag
+// a stale result. Client-safe; the disk store is lib/triageResultStore.ts.
+export interface PersistedTriage {
+  result: TriageResponse | null;
+  batchKey: string | null;
+  ranAt: string | null; // ISO timestamp of the run
+}
+
 // =====================================================================
 // BUDGETIQ: financial planning (accruals + reforecast)
 // =====================================================================
@@ -265,8 +275,17 @@ export interface InvoiceIngestResponse {
 }
 
 // A human's disposition of an exception in the matching queue. Persisted per
-// uploaded invoice so a partially-reviewed queue survives a restart.
+// invoice so a partially-reviewed queue survives navigation and restart.
 export type HumanAction = "approved" | "override";
+
+// The full persisted disposition of one exception: the decision plus, for a
+// manual correction (override), the PO and note the reviewer hand-entered. Keyed
+// by invoice number in the decision store (lib/decisionStore.ts). Client-safe.
+export interface StoredDecision {
+  decision: HumanAction;
+  manualPo?: string;
+  manualNote?: string;
+}
 
 // One persisted uploaded invoice: the full parsed invoice plus the metadata the
 // matching queue needs to restore it across sessions. Client-safe (no fs); the
@@ -295,6 +314,23 @@ export interface BudgetIngestResponse {
   lines: BudgetIngestLine[];
   _meta: IngestMeta;
 }
+
+// What POST /api/ingest returns for kind="budget-plan": the parsed budget itself,
+// one VendorBudgetLine per vendor, read off an uploaded CSV/XLSX/PDF budget so the
+// planner does not hand-key the budget table. These flow into the live budget
+// store (data/budget.json) and become the basis every accrual and reforecast runs
+// against. `period`/`fiscalYear` are captured when the document states them.
+export interface BudgetPlanIngestResponse {
+  lines: VendorBudgetLine[];
+  period: string | null;
+  warnings: string[];      // rows skipped or columns missing, surfaced to the planner
+  _meta: IngestMeta;
+}
+
+// Where the live budget came from: the shipped synthetic seed, or a budget the
+// planner ingested/edited. Surfaced in the UI so it is always clear whether the
+// numbers on screen are the demo seed or a real upload.
+export type BudgetSource = "seed" | "ingested";
 
 // One uploaded finance actual, matched to a budget line and persisted so the
 // accrual draft and the reforecast variance it feeds survive a reload / restart.
@@ -358,4 +394,38 @@ export interface CorpusStatus {
   indexed: number;          // how many have an embedding
   embeddingModel: string;   // the local model id, or "unavailable"
   lastUpdated: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail. Every place a human touches a decision (commits a reviewed
+// contract, approves or overrides an invoice match, reopens a closed item,
+// applies actuals to the budget) appends one immutable AuditEvent. The log is
+// append-only and persisted to disk so the record of "who decided what, when"
+// survives reloads and restarts, and is exportable as a spreadsheet for a
+// compliance reviewer. This is the auditable human-touchpoint trail.
+export type AuditModule = "ContractIQ" | "BudgetIQ";
+
+// Coarse machine-readable category of the touchpoint, so the trail can be
+// filtered and the dashboard can count by kind without parsing free text.
+export type AuditAction =
+  | "contract-committed"   // a reviewed contract crossed into the shared record
+  | "invoice-approved"     // human accepted the suggested match/resolution
+  | "invoice-corrected"    // human took it over and entered a PO/resolution
+  | "invoice-reopened"     // human reversed a prior decision
+  | "budget-actuals"       // human applied uploaded actuals to the forecast
+  | "budget-updated"       // human ingested or edited the budget itself
+  | "thresholds-changed"   // human edited the clause rule thresholds
+  | "po-updated";          // human edited a PO register entry (terms / remaining)
+
+export interface AuditEvent {
+  id: string;              // "evt-<seq>", unique across clears
+  at: string;              // ISO timestamp of the touchpoint
+  module: AuditModule;     // which product surface produced it
+  surface: string;         // human label, e.g. "Contract review", "Invoice check"
+  actor: string;           // human-in-the-loop marker, e.g. "attorney", "ap-analyst"
+  action: AuditAction;     // machine category (see above)
+  actionLabel: string;     // human label, e.g. "Approved match", "Manual correction"
+  subject: string;         // what was acted on: vendor, invoice no., or contract name
+  outcome: string;         // resulting disposition, e.g. "clean-pass", "override", "resolved"
+  detail: string;          // free-text context for the reviewer
 }

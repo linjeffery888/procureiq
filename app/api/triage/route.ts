@@ -1,11 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 import { INVOICES } from "@/lib/mockData";
-import { isPoDataset, loadPurchaseOrders } from "@/lib/poRegister";
+import { isPoDataset, loadPurchaseOrdersWithOverrides, PoDataset } from "@/lib/poRegister";
 import { matchAllDeterministic } from "@/lib/matching";
 import { buildLiveResults, extractJsonObject, parseAiResolutions } from "@/lib/normalizeTriage";
 import { offlineTriage } from "@/lib/offlineTriage";
 import { applyBatchDedup } from "@/lib/triageDedup";
+import { clearTriageResult, getTriageResult, saveTriageResult } from "@/lib/triageResultStore";
+import { triageBatchKey } from "@/lib/triageKey";
+import { anthropicApiKey } from "@/lib/anthropicKey";
 import { Invoice, MatchResult, PurchaseOrder, TriageMeta, TriageResponse } from "@/lib/types";
 
 // The invoice/PO triage engine. The deterministic core (lib/matching.ts) owns
@@ -75,6 +78,18 @@ function buildUserPrompt(pos: PurchaseOrder[], queue: MatchResult[]): string {
   return `OPEN PURCHASE ORDERS:\n${poLines}\n\nEXCEPTION QUEUE (resolve and triage each):\n${invLines}`;
 }
 
+// Return the last persisted triage run so the page can show it on mount without
+// re-running. Triage now runs only when the user presses Run.
+export async function GET() {
+  return NextResponse.json(await getTriageResult());
+}
+
+// Clear the persisted triage run (a reset convenience).
+export async function DELETE() {
+  await clearTriageResult();
+  return NextResponse.json({ ok: true });
+}
+
 export async function POST(req: NextRequest) {
   const started = Date.now();
 
@@ -87,13 +102,14 @@ export async function POST(req: NextRequest) {
   // An explicit `purchaseOrders` array still overrides everything (e.g. a caller
   // passing its own register slice). See lib/poRegister.ts.
   let invoices: Invoice[] = INVOICES;
-  let pos: PurchaseOrder[] = loadPurchaseOrders("demo");
+  let dataset: PoDataset = "demo";
+  let explicitPos: PurchaseOrder[] | null = null;
   let forceOffline = false;
   try {
     const body = await req.json();
     if (body && Array.isArray(body.invoices) && body.invoices.length) invoices = body.invoices;
-    if (isPoDataset(body?.dataset)) pos = loadPurchaseOrders(body.dataset);
-    if (body && Array.isArray(body.purchaseOrders) && body.purchaseOrders.length) pos = body.purchaseOrders;
+    if (isPoDataset(body?.dataset)) dataset = body.dataset;
+    if (body && Array.isArray(body.purchaseOrders) && body.purchaseOrders.length) explicitPos = body.purchaseOrders;
     // The top-bar Engine toggle. Offline forces the deterministic engine even
     // when a key is present, so the heuristic path can be demoed on demand.
     forceOffline = body?.forceOffline === true;
@@ -101,24 +117,42 @@ export async function POST(req: NextRequest) {
     // No body or invalid JSON: fall back to the bundled synthetic batch.
   }
 
+  // Resolve the PO universe the check runs against, with any human edits from the
+  // PO register applied: an overridden `remaining` actually changes what the next
+  // invoice budget check resolves against (see lib/poRegister + poOverridesStore).
+  // An explicit purchaseOrders array in the body still overrides everything.
+  const pos: PurchaseOrder[] = explicitPos ?? (await loadPurchaseOrdersWithOverrides(dataset));
+
   // The deterministic baseline always runs. It is both the offline result and
   // the source of the exception queue we hand to the model.
   const baseline = matchAllDeterministic(invoices, pos);
   const queue = baseline.filter((r) => r.status !== "matched");
 
-  const offline = (note: string): NextResponse => {
+  // Persist every run so the page can show the last result on mount without
+  // re-running, tagged with the batch signature so a stale result can be flagged.
+  const batchKey = triageBatchKey(forceOffline, invoices);
+  const respond = async (res: TriageResponse): Promise<NextResponse> => {
+    await saveTriageResult(res, batchKey);
+    return NextResponse.json(res);
+  };
+
+  const offline = (note: string): Promise<NextResponse> => {
     const res: TriageResponse = {
       results: applyBatchDedup(offlineTriage(invoices, pos)),
       meta: meta("offline-deterministic", null, Date.now() - started, note),
     };
-    return NextResponse.json(res);
+    return respond(res);
   };
+
+  // Resolve the key once, the same way for the gate and the live client, so an
+  // empty ANTHROPIC_API_KEY in the shell can't shadow the real key in .env.local.
+  const apiKey = anthropicApiKey();
 
   // --- Offline path: no key, or the Engine toggle forced it. Deterministic
   // engine only, so the demo still renders fully. ---
-  if (forceOffline || !process.env.ANTHROPIC_API_KEY) {
+  if (forceOffline || !apiKey) {
     return offline(
-      forceOffline && process.env.ANTHROPIC_API_KEY
+      forceOffline && apiKey
         ? "Offline deterministic mode: the Engine toggle is set to Offline, so fuzzy vendor matches were not attempted and exception triage was templated, not drafted by the model. The money decision (PO link + budget check) is identical to the live path. Switch the toggle to Live for AI triage."
         : "Offline deterministic mode: no ANTHROPIC_API_KEY set, so fuzzy vendor matches were not attempted and exception triage was templated, not drafted by the model. The money decision (PO link + budget check) is identical to the live path. Set a key in .env.local for live AI triage.",
     );
@@ -130,12 +164,12 @@ export async function POST(req: NextRequest) {
       results: applyBatchDedup(baseline),
       meta: meta("live", MODEL, Date.now() - started, `Every invoice cleared deterministically; no exception queue for ${MODEL} to triage.`),
     };
-    return NextResponse.json(res);
+    return respond(res);
   }
 
   // --- Live path: ask Claude to resolve + triage the queue, parse forgivingly ---
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const client = new Anthropic({ apiKey });
     const msg = await client.messages.create({
       model: MODEL,
       // A large exception queue (many uploaded invoices, each with reasoning +
@@ -167,7 +201,7 @@ export async function POST(req: NextRequest) {
       results,
       meta: meta("live", MODEL, Date.now() - started, `Live exception triage by ${MODEL} on ${queue.length} flagged invoice(s). The budget check and final status are deterministic; a human approves every exception.`),
     };
-    return NextResponse.json(res);
+    return respond(res);
   } catch (err: any) {
     return offline(
       `Live engine unavailable (${err?.message ?? "API error"}); fell back to the deterministic engine. The clean invoices below still cleared by rule.`,

@@ -12,6 +12,7 @@
 
 import { ContractExtraction, PlaybookFinding, Severity, ExtractedTerm, ParentReference, InstrumentType } from "./types";
 import { PLAYBOOK, AMENDMENT_RULES, CONSISTENCY_CHECKS } from "./playbook";
+import { ClauseThresholds, DEFAULT_THRESHOLDS } from "./clauseThresholds";
 
 // A Contract No. token, e.g. IOV-MSA-2024-0142 or IOV-CO-2024-0142-02. Two
 // letter/number groups, a 4-digit year, a sequence, and an optional child suffix.
@@ -417,7 +418,7 @@ function findContractId(text: string, parentId: string | null): string | null {
   return labeled.length ? labeled[0] : null;
 }
 
-export function offlineExtraction(raw: string): ContractExtraction {
+export function offlineExtraction(raw: string, thresholds: ClauseThresholds = DEFAULT_THRESHOLDS): ContractExtraction {
   // Real contracts wrap lines mid-clause, so collapse whitespace before
   // pattern matching. Every detector runs against this flattened text.
   const text = raw.replace(/\s+/g, " ").trim();
@@ -480,15 +481,15 @@ export function offlineExtraction(raw: string): ContractExtraction {
   // also clear, and anything longer is better for Iovance as the payer. Terms
   // SHORTER than Net 40 (Net 30, Net 15, due on receipt) are the vendor-favorable
   // deviation that strains cash timing, so they flag for the attorney to redline.
-  const MIN_ACCEPTABLE_NET_DAYS = 40;
+  const MIN_ACCEPTABLE_NET_DAYS = thresholds.minNetDays;
   if (days == null) {
     findings.push(absent("net_payment_terms", "No payment term detected in the text. Confirm the net terms manually."));
   } else if (days >= MIN_ACCEPTABLE_NET_DAYS) {
-    findings.push(finding("net_payment_terms", `Net ${days}`, "ok", `Net ${days} meets Iovance's payment-term standard (Net 40, Net 45, or Net 60; longer is better for the payer).`));
+    findings.push(finding("net_payment_terms", `Net ${days}`, "ok", `Net ${days} meets Iovance's payment-term standard (at least Net ${MIN_ACCEPTABLE_NET_DAYS}; longer is better for the payer).`));
   } else if (days === 0) {
-    findings.push(finding("net_payment_terms", "Due on receipt", "flag", "Payment due on receipt is far shorter than Iovance's Net 40/45/60 standard and strains cash timing.", "Push back toward Net 60 from receipt of an undisputed invoice."));
+    findings.push(finding("net_payment_terms", "Due on receipt", "flag", `Payment due on receipt is far shorter than Iovance's Net ${MIN_ACCEPTABLE_NET_DAYS} standard and strains cash timing.`, "Push back toward Net 60 from receipt of an undisputed invoice."));
   } else {
-    findings.push(finding("net_payment_terms", `Net ${days}`, "flag", `Net ${days} is shorter than Iovance's Net 40/45/60 standard, the vendor-favorable deviation, and strains cash timing.`, "Push back toward Net 60 from receipt of an undisputed invoice."));
+    findings.push(finding("net_payment_terms", `Net ${days}`, "flag", `Net ${days} is shorter than Iovance's Net ${MIN_ACCEPTABLE_NET_DAYS} standard, the vendor-favorable deviation, and strains cash timing.`, "Push back toward Net 60 from receipt of an undisputed invoice."));
   }
 
   // 2. Limitation of liability. A cap that is present is acceptable (the higher
@@ -498,7 +499,7 @@ export function offlineExtraction(raw: string): ContractExtraction {
   // A sensitive-data vendor capped below this is too thin (Iovance expects a
   // cap of a million or more for PHI/PII; a quarter-million is the planted
   // deviation, while a half-million-and-up cap is treated as acceptable).
-  const PHI_CAP_FLOOR = 500_000;
+  const PHI_CAP_FLOOR = thresholds.minLiabilityCap;
   const lolRegion = liabilityRegion(text);
   const processesPhi = processesSensitiveData(text);
   if (lolRegion && isUncappedLiability(lolRegion)) {
@@ -530,9 +531,10 @@ export function offlineExtraction(raw: string): ContractExtraction {
   const confYears = text.match(/confidential[\s\S]{0,120}?(?:period of\s+)?(?:(\w+)\s*)?\((\d{1,2})\)\s*years?/i);
   if (confYears) {
     const yrs = Number(confYears[2]);
-    if (yrs >= 3) findings.push(finding("confidentiality", `Survives ${yrs} years`, "ok", `Confidentiality survives ${yrs} years, inside the 3 to 5 year standard.`));
-    else if (yrs >= 2) findings.push(finding("confidentiality", `Survives ${yrs} years`, "review", `Confidentiality survives only ${yrs} years; Iovance prefers 3 to 5.`, "Extend the confidentiality survival period to at least 3 years post-termination."));
-    else findings.push(finding("confidentiality", `Survives ${yrs} year(s)`, "flag", `Confidentiality survives under 2 years.`, "Extend the confidentiality survival period to 3 to 5 years post-termination."));
+    const minConfYears = thresholds.minConfidentialityYears;
+    if (yrs >= minConfYears) findings.push(finding("confidentiality", `Survives ${yrs} years`, "ok", `Confidentiality survives ${yrs} years, at or above the ${minConfYears}-year standard.`));
+    else if (yrs >= minConfYears - 1) findings.push(finding("confidentiality", `Survives ${yrs} years`, "review", `Confidentiality survives only ${yrs} years; Iovance prefers ${minConfYears} or more.`, `Extend the confidentiality survival period to at least ${minConfYears} years post-termination.`));
+    else findings.push(finding("confidentiality", `Survives ${yrs} year(s)`, "flag", `Confidentiality survives under ${minConfYears - 1} years.`, `Extend the confidentiality survival period to ${minConfYears} or more years post-termination.`));
   } else if (/confidential/i.test(text)) {
     findings.push(finding("confidentiality", "Present, survival period unclear", "review", "A confidentiality clause exists but the survival period is not clearly stated. Confirm mutual, 3 to 5 years."));
   } else {
@@ -553,28 +555,124 @@ export function offlineExtraction(raw: string): ContractExtraction {
   }
 
   // 6. Auto-renewal
-  if (autoRenew && autoRenewNotice != null && autoRenewNotice < 60) {
-    findings.push(finding("auto_renewal", `Auto-renews, ${autoRenewNotice} days opt-out notice`, "flag", `Auto-renews with only ${autoRenewNotice} days notice; Iovance needs 60+ days to avoid silent renewals.`, "Require at least 60 days' opt-out notice before any auto-renewal, or remove auto-renewal."));
+  if (autoRenew && autoRenewNotice != null && autoRenewNotice < thresholds.minOptOutNoticeDays) {
+    findings.push(finding("auto_renewal", `Auto-renews, ${autoRenewNotice} days opt-out notice`, "flag", `Auto-renews with only ${autoRenewNotice} days notice; Iovance needs ${thresholds.minOptOutNoticeDays}+ days to avoid silent renewals.`, `Require at least ${thresholds.minOptOutNoticeDays} days' opt-out notice before any auto-renewal, or remove auto-renewal.`));
   } else if (autoRenew) {
-    findings.push(finding("auto_renewal", "Auto-renews, 60+ days notice", "ok", "Auto-renewal carries adequate opt-out notice."));
+    findings.push(finding("auto_renewal", `Auto-renews, ${thresholds.minOptOutNoticeDays}+ days notice`, "ok", "Auto-renewal carries adequate opt-out notice."));
   } else if (inherited) {
     findings.push(finding("auto_renewal", null, "ok", "Inherited from the parent agreement; not restated in this amendment."));
   } else {
     findings.push(finding("auto_renewal", "No auto-renewal detected", "ok", "No auto-renewal clause detected, which matches Iovance's preference."));
   }
 
-  // 7. Data privacy / PHI
-  const processesPersonal = /personal data|\bphi\b|personal information/i.test(text);
-  const hasDpa = /data processing agreement|\bdpa\b|business associate agreement|\bbaa\b/i.test(text);
-  const dpaAbsent = /no data processing agreement|no dpa|without a (?:dpa|data processing agreement)/i.test(text);
-  if (processesPersonal && (dpaAbsent || !hasDpa)) {
-    findings.push(finding("data_privacy", "Personal data processed, no DPA/BAA", "flag", "The agreement processes personal data but references no DPA/BAA. This is a privacy and compliance gap.", "Attach a Data Processing Agreement (and BAA if PHI is involved) before execution."));
-  } else if (processesPersonal && hasDpa) {
-    findings.push(finding("data_privacy", "Personal data processed, DPA present", "ok", "Personal data is processed under a referenced DPA/BAA, matching standard."));
-  } else if (inherited) {
-    findings.push(finding("data_privacy", null, "ok", "Inherited from the parent agreement; not restated in this amendment."));
+  // 7. Data privacy / DPA. The playbook escalates when sensitive data is
+  // processed with no DPA, OR with a DPA that omits subprocessor disclosure or
+  // breach recourse. So it is not enough that the words "data processing
+  // agreement" appear: a section merely TITLED "Data Processing Agreement" that
+  // promises "reasonable security measures" and nothing else is a stub, not an
+  // enforceable DPA, and still escalates. An attached or incorporated DPA/BAA is
+  // taken at face value; an in-body DPA is adequate only when it covers both
+  // subprocessor disclosure and breach recourse.
+  const processesPersonal =
+    /personal data|\bphi\b|personal information|protected health information|patient (?:data|records|information)/i.test(text);
+  const dpaMentioned =
+    /data processing (?:agreement|addendum)|\bdpa\b|business associate (?:agreement|addendum)|\bbaa\b/i.test(text);
+  const dpaExplicitlyAbsent =
+    /no data processing (?:agreement|addendum)|no dpa\b|without a (?:dpa|data processing (?:agreement|addendum))/i.test(text);
+  // A DPA carried by the PARENT agreement and kept in force by this renewal or
+  // amendment is adequate by incorporation, even though the child does not
+  // restate subprocessor or breach terms. The anchor is a DPA tied to the
+  // "original" / "master" / "parent" agreement that "remains in full force",
+  // "survives", or "applies". Note "attached hereto" / "herein" points at THIS
+  // document, not a parent, so it does NOT count as incorporation, which keeps
+  // a self-contained adversarial DPA (Stratos) on the substantive path below.
+  const dpaIncorporatedFromParent =
+    /(?:data processing (?:agreement|addendum)|\bdpa\b|business associate (?:agreement|addendum)|\bbaa\b)[^.]{0,160}?(?:original agreement|master (?:services )?agreement|parent agreement|underlying agreement)[^.]{0,80}?(?:remains?|continues?|in full force|in effect|survive|incorporat|applies)/i.test(text) ||
+    /(?:original agreement|master (?:services )?agreement|parent agreement|underlying agreement)[^.]{0,120}?(?:data processing (?:agreement|addendum)|\bdpa\b)[^.]{0,80}?(?:remains?|continues?|in full force|in effect|survive|applies)/i.test(text) ||
+    /(?:data processing (?:agreement|addendum)|\bdpa\b)[^.]{0,60}?attached to the original/i.test(text);
+  // The two substantive elements the playbook calls out for a real in-body DPA.
+  // Each must be an AFFIRMATIVE obligation. A clause that names subprocessors or
+  // breach only to DISCLAIM the duty (e.g. "subprocessors at its sole
+  // discretion, not required to disclose", or breach handling with "no
+  // liability or remediation obligation") is worse than silence and must NOT
+  // satisfy the check. We do not trust an "attached as Exhibit A / incorporated
+  // by reference" phrase on its own: a stub can name an exhibit it never
+  // substantiates. Every clean patient-data MSA in the corpus carries both
+  // markers affirmatively in the body, so requiring them catches a hollow or
+  // self-disclaiming DPA without false-positiving the clean set.
+  // A real subprocessor clause is not just the noun: it must impose a
+  // disclosure or flow-down obligation (a current list, notice/consent before
+  // engaging, or binding subprocessors to the same data terms). A clause that
+  // merely permits "subprocessors to assist in providing the Services" with no
+  // obligation is a neutered subprocessor term and does NOT count.
+  const dpaSubprocessor =
+    /sub-?processors?[^.]{0,180}?(?:list of sub-?processors?|current list|available to (?:client|customer)|disclose|notify|inform|prior (?:written )?(?:notice|consent|approval)|bound by|subject to (?:the )?(?:same|equivalent|data protection)|flow[- ]?down|impose (?:the )?(?:same|equivalent))/i.test(text) ||
+    /(?:disclose|notify|inform|provide (?:a )?(?:current )?list|maintain (?:a )?(?:current )?list)[^.]{0,90}?sub-?processors?/i.test(text) ||
+    /onward transfer[^.]{0,60}?(?:notice|consent|disclos|bound)/i.test(text);
+  const dpaSubprocessorDisclaimed =
+    /sub-?processors?[^.]{0,140}?(?:at its sole discretion|not required to disclose|no obligation to disclose|not required to bind)/i.test(text) ||
+    /not required to (?:disclose|bind)[^.]{0,60}?sub-?processor/i.test(text);
+  const dpaBreachRecourse =
+    /breach notif\w*|notif\w*[^.]{0,50}?(?:breach|incident)|security incident[^.]{0,50}?notif|data breach[^.]{0,50}?(?:notif|recourse|remed)|notify[^.]{0,50}?(?:breach|incident)/i.test(text);
+  const dpaBreachDisclaimed =
+    /(?:no liability|no remediation obligation|no obligation to (?:remediat|notif))[^.]{0,80}?(?:data breach|breach)/i.test(text) ||
+    /data breach[^.]{0,120}?(?:no liability|no remediation obligation)/i.test(text);
+  const dpaSubprocessorOk = dpaSubprocessor && !dpaSubprocessorDisclaimed;
+  const dpaBreachOk = dpaBreachRecourse && !dpaBreachDisclaimed;
+  const dpaAdequate =
+    dpaMentioned && !dpaExplicitlyAbsent && dpaSubprocessorOk && dpaBreachOk;
+  // Does THIS document set up its own data-processing terms, or does it only
+  // touch personal data through a parent it incorporates? A change order or SOW
+  // that names a "Patient Data Analytics Module" but carries no data clause of
+  // its own relies on the parent MSA's DPA and should not be flagged. We treat
+  // the document as having its own clause when it names a DPA/BAA, has a "DATA
+  // PROCESSING" section heading, or affirmatively describes processing personal
+  // data. This is what separates a renewal that drops in a fresh stub clause
+  // (flag) from a change order that simply inherits the parent (ok).
+  const ownDataClause =
+    dpaMentioned ||
+    /(?:^|\n)\s*\d*\.?\s*data processing\b/i.test(text) ||
+    /process(?:es|ing|ed)?\s+(?:personal data|personal information|\bphi\b|protected health)/i.test(text) ||
+    /(?:personal data|personal information|\bphi\b|protected health)[^.]{0,30}?\bprocess(?:es|ing|ed)?\b/i.test(text);
+
+  if (!processesPersonal) {
+    if (inherited) {
+      findings.push(finding("data_privacy", null, "ok", "Inherited from the parent agreement; not restated in this amendment."));
+    } else {
+      findings.push(finding("data_privacy", "No personal data processing detected", "ok", "No personal-data processing detected; a DPA is not required on its face. Confirm scope."));
+    }
+  } else if (dpaIncorporatedFromParent) {
+    findings.push(finding("data_privacy", "DPA incorporated from the original agreement", "ok", "The renewal keeps the parent agreement's Data Processing Agreement in full force, so the data terms carry forward. Confirm the parent DPA still meets standard."));
+  } else if (dpaAdequate) {
+    findings.push(finding("data_privacy", "Personal data processed, DPA present", "ok", "Personal data is processed under a DPA that covers security, subprocessor disclosure, and breach recourse, matching standard."));
+  } else if (dpaMentioned && !dpaExplicitlyAbsent) {
+    // A DPA section is present but hollow or self-disclaiming: a title plus
+    // "reasonable security measures", or subprocessor/breach clauses that name
+    // the duty only to waive it. Flag even on an inheriting child, because the
+    // document is affirmatively setting an inadequate data term.
+    const gaps: string[] = [];
+    if (!dpaSubprocessorOk) gaps.push(dpaSubprocessorDisclaimed ? "binding subprocessor disclosure (the clause waives it)" : "subprocessor/subcontractor disclosure");
+    if (!dpaBreachOk) gaps.push(dpaBreachDisclaimed ? "breach notification and recourse (the clause disclaims liability)" : "breach notification and recourse");
+    const gapText = gaps.length ? gaps.join(" and ") : "the substantive processor obligations";
+    findings.push(finding(
+      "data_privacy",
+      "DPA named but incomplete (stub)",
+      "flag",
+      `A data-processing section is present but omits ${gapText}. A heading plus "reasonable security measures" is a stub, not an enforceable DPA, so it escalates.`,
+      "Replace the placeholder data-processing section with a full DPA covering security, subprocessor disclosure, and breach notification/recourse, or attach Iovance's standard DPA as an exhibit.",
+    ));
+  } else if (!ownDataClause && inherited) {
+    // The document touches personal data only by naming a parent module or
+    // service; it carries no data clause of its own and incorporates the parent
+    // agreement, so the parent MSA's DPA governs. Not a gap on this document.
+    findings.push(finding("data_privacy", null, "ok", "Inherited from the parent agreement; the parent carries the data-processing terms and this document adds none of its own."));
   } else {
-    findings.push(finding("data_privacy", "No personal data processing detected", "ok", "No personal-data processing detected; a DPA is not required on its face. Confirm scope."));
+    // Personal data, with the document setting up its own processing (or a
+    // standalone agreement) yet no DPA section at all (or one explicitly
+    // disclaimed) and nothing incorporated from a parent. Escalate even on an
+    // amendment: a data-processing vendor needs a DPA somewhere, and this
+    // document neither contains an adequate one nor references the parent's.
+    findings.push(finding("data_privacy", "Personal data processed, no DPA/BAA", "flag", "The agreement processes personal data but references no DPA/BAA. This is a privacy and compliance gap.", "Attach a Data Processing Agreement (and BAA if PHI is involved) covering security, subprocessor disclosure, and breach notification before execution."));
   }
 
   // 8. Governing law

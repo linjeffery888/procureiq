@@ -26,9 +26,11 @@ import {
   RetrievedPrecedent,
 } from "./types";
 import { SEED_PRECEDENTS } from "./mockData";
+import { ClauseThresholds, classifyClauseByThreshold } from "./clauseThresholds";
 import {
   embedText,
   embedMany,
+  lexicalEmbed,
   cosine,
   embeddingInfo,
   labelFor,
@@ -116,7 +118,7 @@ export async function indexAll(): Promise<CorpusStatus> {
   const providerChanged = store.provider != null && store.provider !== provider;
   const targets = providerChanged ? store.docs : store.docs.filter((d) => !hasEmbedding(d));
   if (targets.length > 0) {
-    const vectors = await embedMany(targets.map((d) => `${d.title}\n${d.text}`));
+    const vectors = await embedMany(targets.map(docEmbedText));
     targets.forEach((d, i) => { d.embedding = vectors[i]; });
     store.provider = provider;
     store.lastUpdated = new Date().toISOString();
@@ -158,7 +160,7 @@ export async function addDocs(inputs: NewDocInput[]): Promise<CorpusStatus> {
   }));
   const providerChanged = store.provider != null && store.provider !== provider;
   const toEmbed = providerChanged ? [...store.docs, ...prepared] : prepared;
-  const vectors = await embedMany(toEmbed.map((d) => `${d.title}\n${d.text}`));
+  const vectors = await embedMany(toEmbed.map(docEmbedText));
   toEmbed.forEach((d, i) => { d.embedding = vectors[i]; });
   store.docs.push(...prepared);
   store.provider = provider;
@@ -177,6 +179,31 @@ export async function labelDoc(id: string, label: CorpusLabel): Promise<CorpusSt
     await writeStore(store);
   }
   return statusFrom(store);
+}
+
+// Re-label the whole corpus against a set of clause thresholds. For each
+// precedent whose clause carries a numeric threshold (net terms, liability cap,
+// confidentiality survival, auto-renewal notice), re-derive pass/flag from the
+// precedent's own text under the new thresholds; precedents whose clause has no
+// numeric threshold, or whose text states no parseable value, keep their existing
+// label. This is the downstream effect of editing a threshold: raising or
+// lowering a number re-colors which on-file precedents read as pass vs flag,
+// without re-embedding anything. Returns the new status plus how many flipped.
+export async function relabelByThresholds(
+  thresholds: ClauseThresholds,
+): Promise<{ status: CorpusStatus; changed: number }> {
+  const store = await readStore();
+  let changed = 0;
+  for (const doc of store.docs) {
+    const next = classifyClauseByThreshold(doc.clauseTag, doc.text, thresholds);
+    if (next != null && next !== doc.label) {
+      doc.label = next;
+      changed++;
+    }
+  }
+  if (changed > 0) store.lastUpdated = new Date().toISOString();
+  await writeStore(store);
+  return { status: statusFrom(store), changed };
 }
 
 // One corpus doc for the UI: the stored fields minus the heavy embedding vector,
@@ -207,9 +234,69 @@ function toPrecedent(doc: CorpusDoc, score: number): RetrievedPrecedent {
   };
 }
 
-// Retrieve the top-k precedents for a query string by cosine similarity. Indexes
-// (or re-indexes on a provider change) on demand so a fresh corpus still returns
-// results. Returns an empty list only if embedding the query itself fails.
+// Human-readable clause names, prepended to each doc's embedding input so a
+// conceptual query ("uncapped liability") aligns with the clause topic instead of
+// just the surrounding boilerplate. Embedding-only; the UI keeps its own copy.
+const CLAUSE_LABEL: Record<string, string> = {
+  net_payment_terms: "Net payment terms",
+  limitation_of_liability: "Limitation of liability",
+  confidentiality: "Confidentiality and non-disclosure",
+  ip_ownership: "Intellectual property ownership and work product",
+  data_privacy: "Data privacy and protection, DPA",
+  key_dates: "Key dates and effective date",
+  governing_law: "Governing law",
+  corporate_address: "Corporate entity and address",
+  auto_renewal: "Auto-renewal",
+  invoice_schedule_math: "Invoice and payment schedule",
+  order_of_precedence: "Order of precedence",
+};
+
+function clauseLabel(tag: string | null): string {
+  if (!tag) return "";
+  return CLAUSE_LABEL[tag] ?? tag.replace(/_/g, " ");
+}
+
+// The text we actually embed for a precedent. Beyond the raw clause text we
+// prepend the clause topic and fold in the attorney's disposition note, because
+// reviewers query in concepts and outcomes ("vendor owns the work product",
+// "uncapped liability") that match the note and clause name far better than the
+// legal boilerplate alone.
+function docEmbedText(d: {
+  title: string;
+  text: string;
+  note?: string;
+  clauseTag?: string | null;
+}): string {
+  return [clauseLabel(d.clauseTag ?? null), d.title, d.note, d.text]
+    .filter((s) => s && String(s).trim())
+    .join(". ");
+}
+
+// Which clause tags a free-text query is "about", by keyword hits. Used to bias
+// retrieval toward the relevant clause families so an IP/liability query does not
+// surface key-dates precedents that merely share generic contract wording.
+function inferQueryClauses(query: string): Set<string> {
+  const low = ` ${query.toLowerCase()} `;
+  const hits = new Set<string>();
+  for (const tag of Object.keys(CLAUSE_KEYWORDS)) {
+    if (CLAUSE_KEYWORDS[tag].some((kw) => low.includes(kw))) hits.add(tag);
+  }
+  return hits;
+}
+
+// Hybrid retrieval weights. Dense (semantic) carries the bulk; a sparse lexical
+// overlap term rescues exact-phrase matches that mean-pooling washes out
+// ("uncapped", "work product"); a clause-affinity bonus lifts precedents whose
+// clause the query is explicitly about. Tuned so a strong off-clause semantic
+// match can still rank, but on-topic precedents are not buried under boilerplate.
+const W_SEMANTIC = 0.55;
+const W_LEXICAL = 0.3;
+const W_CLAUSE = 0.15;
+
+// Retrieve the top-k precedents for a query with a hybrid score: dense cosine +
+// sparse lexical overlap + a clause-affinity boost. Indexes (or re-indexes on a
+// provider change) on demand so a fresh corpus still returns results. Returns an
+// empty list only if embedding the query itself fails.
 export async function retrieve(query: string, k = 4): Promise<RetrievedPrecedent[]> {
   if (!query || !query.trim()) return [];
   let store = await readStore();
@@ -222,18 +309,57 @@ export async function retrieve(query: string, k = 4): Promise<RetrievedPrecedent
       return [];
     }
   }
-  let q: number[];
+  let qVec: number[];
   try {
-    q = await embedText(query);
+    qVec = await embedText(query);
   } catch {
     return [];
   }
-  const scored = store.docs
+  // Provider-independent signals: sparse lexical vector of the query, and the
+  // clause families the query mentions. Computed once, reused across all docs.
+  const qLex = lexicalEmbed(query);
+  const qClauses = inferQueryClauses(query);
+
+  const ranked = store.docs
     .filter(hasEmbedding)
-    .map((d) => ({ doc: d, score: cosine(q, d.embedding as number[]) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, k);
-  return scored.map(({ doc, score }) => toPrecedent(doc, score));
+    .map((d) => {
+      const semantic = cosine(qVec, d.embedding as number[]);
+      const lexical = cosine(qLex, lexicalEmbed(docEmbedText(d)));
+      const clause = d.clauseTag && qClauses.has(d.clauseTag) ? 1 : 0;
+      const score = W_SEMANTIC * semantic + W_LEXICAL * lexical + W_CLAUSE * clause;
+      return { doc: d, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  // When the query spans more than one clause family ("uncapped liability AND
+  // vendor owns the work product"), keep the strongest family from taking every
+  // slot so the second clause still surfaces in the preview. Cap how many slots
+  // any single clause may hold, then backfill by pure score if the corpus is thin
+  // on the other clauses. Single-clause queries never trip the cap, so their
+  // results stay in straight score order.
+  let top: typeof ranked;
+  if (qClauses.size >= 2) {
+    const perClauseCap = Math.max(1, Math.ceil(k * 0.6));
+    const taken: Record<string, number> = {};
+    top = [];
+    for (const item of ranked) {
+      if (top.length >= k) break;
+      const tag = item.doc.clauseTag ?? `__null-${top.length}`;
+      if ((taken[tag] ?? 0) >= perClauseCap) continue;
+      taken[tag] = (taken[tag] ?? 0) + 1;
+      top.push(item);
+    }
+    if (top.length < k) {
+      for (const item of ranked) {
+        if (top.length >= k) break;
+        if (!top.includes(item)) top.push(item);
+      }
+    }
+  } else {
+    top = ranked.slice(0, k);
+  }
+
+  return top.map(({ doc, score }) => toPrecedent(doc, Math.max(0, Math.min(1, score))));
 }
 
 // Keywords per clause tag, used to pull the single most relevant clause sentence
@@ -264,11 +390,36 @@ function toSentences(text: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+// A leading clause/section number such as "8.1", "5.3", "12.", "Section 4.", or
+// "(a)" carries no contract substance; strip it so the excerpt reads as the
+// clause itself and the section digits do not masquerade as a threshold number.
+function stripSectionNumber(s: string): string {
+  return s
+    .replace(/^\s*(?:section|article|clause)\s+\d+(?:\.\d+)*\.?\s+/i, "")
+    .replace(/^\s*\d+(?:\.\d+)*\.?\)?\s+/, "")
+    .replace(/^\s*\([a-z0-9]{1,3}\)\s+/i, "")
+    .trim();
+}
+
+// A sentence that is really just a section heading ("Cap on Liability.",
+// "Deliverables.", "Vendor IP.") states no threshold and is useless as the clause
+// line shown to a reviewer. After the number is stripped, a heading is short and
+// titular, so the reviewer would learn nothing from it. These get skipped in
+// favour of the sentence that actually states the term.
+function isHeadingLike(body: string): boolean {
+  const words = body.split(/\s+/).filter(Boolean);
+  if (words.length <= 4) return true;
+  if (body.length < 28 && !/\d/.test(body)) return true;
+  return false;
+}
+
 // The single clause sentence in `text` most relevant to `clauseTag`, scored by
-// keyword hits with a small bonus for sentences carrying a number (the
-// threshold-bearing clauses — terms, caps, dates — usually have one). Returns a
-// trimmed, verbatim excerpt. Falls back to the first substantive sentence when
-// nothing matches, so the reviewer always sees the contract's own words.
+// keyword hits with a small bonus for sentences carrying a real number (the
+// threshold-bearing clauses — caps, terms, dates — usually have one). The leading
+// section number is stripped first, and bare section headings are skipped, so the
+// reviewer sees the line that states the actual term ("…SHALL NOT EXCEED
+// $250,000"), not its title ("8.1 Cap on Liability."). Returns a trimmed, verbatim
+// excerpt; falls back to the longest substantive line when nothing matches.
 function clauseExcerptOf(text: string, clauseTag: string | null, maxLen = 260): string {
   const sentences = toSentences(text);
   if (sentences.length === 0) return "";
@@ -276,14 +427,20 @@ function clauseExcerptOf(text: string, clauseTag: string | null, maxLen = 260): 
   let best = "";
   let bestScore = -Infinity;
   let bestHits = 0;
+  let longestBody = "";
   sentences.forEach((s, idx) => {
-    const low = s.toLowerCase();
+    const body = stripSectionNumber(s);
+    if (body.length > longestBody.length) longestBody = body;
+    if (isHeadingLike(body)) return; // never show a bare section title as the clause line
+    const low = body.toLowerCase();
     let hits = 0;
     for (const kw of kws) if (low.includes(kw)) hits += 1;
-    let score = hits + (/\d/.test(s) ? 0.25 : 0) - idx * 0.001;
-    if (score > bestScore) { bestScore = score; best = s; bestHits = hits; }
+    // A real content digit (a cap amount, "Net 60", a year) now signals the
+    // threshold-bearing line; the stripped section number no longer counts.
+    const score = hits + (/\d/.test(body) ? 0.25 : 0) - idx * 0.001;
+    if (score > bestScore) { bestScore = score; best = body; bestHits = hits; }
   });
-  if (bestHits === 0) best = sentences.find((s) => s.length > 24) ?? sentences[0];
+  if (bestHits === 0 || !best) best = longestBody || stripSectionNumber(sentences[0]);
   return best.length > maxLen ? best.slice(0, maxLen - 1).trimEnd() + "…" : best;
 }
 

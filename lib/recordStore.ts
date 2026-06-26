@@ -22,6 +22,21 @@ import fs from "fs/promises";
 import path from "path";
 import { ContractExtraction } from "./types";
 
+// How a record earned its way into the shared store. "clean-pass" means the
+// first pass found no hard flags, so it crossed to BudgetIQ on the model's read
+// alone. "human-accepted" means it carried flags that a human dispositioned
+// (accepted or dismissed) before committing, so BudgetIQ can show that a person
+// signed off rather than letting a flagged contract slip downstream silently.
+export type ClearanceStatus = "clean-pass" | "human-accepted";
+
+export interface RecordClearance {
+  status: ClearanceStatus;
+  flags: number;     // hard flags present at commit
+  reviews: number;   // softer review items present at commit
+  accepted: number;  // findings a human marked Accepted
+  dismissed: number; // findings a human marked Dismissed
+}
+
 export interface SharedRecord {
   id: string;
   vendor: string | null;
@@ -29,6 +44,7 @@ export interface SharedRecord {
   sourceName: string;     // filename, sample name, or "pasted text"
   committedAt: string;    // ISO timestamp
   committedBy: string;    // human-in-the-loop marker, e.g. "attorney"
+  clearance: RecordClearance | null; // null on legacy records committed before this signal existed
 }
 
 interface StoreFile {
@@ -95,6 +111,7 @@ export function normalizeVendor(name: string | null | undefined): string {
 export async function saveRecord(
   extraction: ContractExtraction,
   sourceName: string,
+  clearance: RecordClearance | null = null,
   committedBy = "attorney",
 ): Promise<SharedRecord> {
   return withLock(async () => {
@@ -108,6 +125,7 @@ export async function saveRecord(
       existing.sourceName = sourceName;
       existing.committedAt = now;
       existing.committedBy = committedBy;
+      existing.clearance = clearance;
       await writeStore(s);
       return existing;
     }
@@ -119,6 +137,7 @@ export async function saveRecord(
       sourceName,
       committedAt: now,
       committedBy,
+      clearance,
     };
     s.records.push(rec);
     await writeStore(s);
@@ -143,5 +162,18 @@ export async function clearRecords(): Promise<void> {
     const s = await readStore();
     s.records = [];
     await writeStore(s);
+  });
+}
+
+// Remove a single committed record by id, so a mistaken commit can be undone
+// without wiping the whole store. Returns true if a record was removed.
+export async function deleteRecord(id: string): Promise<boolean> {
+  return withLock(async () => {
+    const s = await readStore();
+    const before = s.records.length;
+    s.records = s.records.filter((r) => r.id !== id);
+    const removed = s.records.length < before;
+    if (removed) await writeStore(s);
+    return removed;
   });
 }

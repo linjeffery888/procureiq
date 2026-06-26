@@ -1,0 +1,184 @@
+{
+  "apexion-co": {
+    "vendor": "Apexion Cloud Services, Inc.",
+    "counterpartyType": "Cloud Services Vendor",
+    "totalValue": null,
+    "currency": null,
+    "startDate": null,
+    "endDate": null,
+    "termMonths": null,
+    "paymentSchedule": null,
+    "autoRenewal": null,
+    "governingLaw": null,
+    "terms": [
+      {
+        "key": "net_payment_terms",
+        "label": "Net Payment Terms",
+        "value": "Net 60",
+        "sourceQuote": "Client shall pay all undisputed invoices within sixty (60) days of receipt (Net 60)."
+      },
+      {
+        "key": "limitation_of_liability",
+        "label": "Limitation of Liability",
+        "value": "Aggregate liability capped at total fees paid in the 12 months preceding the claim; carve-outs for IP infringement, data breach, and indemnification.",
+        "sourceQuote": "each party's aggregate liability shall not exceed the total fees paid in the twelve (12) months preceding the claim, with carve-outs for infringement of intellectual property, data breach, and indemnification obligations."
+      },
+      {
+        "key": "ip_ownership",
+        "label": "IP Ownership",
+        "value": "Client owns all deliverables and work product; Vendor retains pre-existing platform IP only.",
+        "sourceQuote": "the Client owns all right, title, and interest in the deliverables and work product created under the Agreement, and Vendor retains only its pre-existing platform intellectual property."
+      },
+      {
+        "key": "data_privacy",
+        "label": "Data Processing Addendum",
+        "value": null
+      },
+      {
+        "key": "confidentiality",
+        "label": "Confidentiality",
+        "value": null
+      },
+      {
+        "key": "termination",
+        "label": "Termination for Convenience",
+        "value": null
+      },
+      {
+        "key": "auto_renewal",
+        "label": "Auto-Renewal",
+        "value": null
+      },
+      {
+        "key": "governing_law",
+        "label": "Governing Law",
+        "value": null
+      },
+      {
+        "key": "order_of_precedence",
+        "label": "Order of Precedence",
+        "value": "This Change Order controls over the Agreement on any conflict.",
+        "sourceQuote": "In the event of any conflict, the order of precedence is this Change Order, then the Agreement."
+      },
+      {
+        "key": "incorporation_by_reference",
+        "label": "Incorporation by Reference",
+        "value": "Incorporates Master Services Agreement No. IOV-MSA-2024-0142 by reference.",
+        "sourceQuote": "This Change Order is issued under and governed by that certain Master Services Agreement No. IOV-MSA-2024-0142, dated March 14, 2024 ... which is incorporated herein by reference."
+      },
+      {
+        "key": "entire_agreement",
+        "label": "Entire Agreement / No Oral Modification",
+        "value": "Unchanged terms of the Agreement remain in full force and effect; no explicit entire-agreement or no-oral-modification clause present in this Change Order.",
+        "sourceQuote": "Except as expressly amended herein, all terms and conditions of the Agreement remain in full force and effect."
+      },
+      {
+        "key": "authority_to_execute",
+        "label": "Authority to Execute",
+        "value": null
+      },
+      {
+        "key": "invoice_schedule_math",
+        "label": "Invoice Schedule Arithmetic",
+        "value": null
+      },
+      {
+        "key": "key_dates",
+        "label": "Key Dates",
+        "value": "Effective date: May 2, 2026. Parent MSA dated March 14, 2024. No explicit start/end date for the amended scope stated in this Change Order.",
+        "sourceQuote": "This Change Order (\"Change Order\") is entered into as of May 2, 2026 ... Master Services Agreement No. IOV-MSA-2024-0142, dated March 14, 2024."
+      },
+      {
+        "key": "corporate_address",
+        "label": "Corporate Entity and Address",
+        "value": "Iovance Biotherapeutics, Inc. and Apexion Cloud Services, Inc. named; no addresses stated in the Change Order.",
+        "sourceQuote": "by and between Iovance Biotherapeutics, Inc. (\"Client\") and Apexion Cloud Services, Inc. (\"Vendor\")."
+      }
+    ],
+    "findings": [
+      {
+        "termKey": "net_payment_terms",
+        "label": "Net Payment Terms",
+        "found": "Net 60",
+        "standard": "Net 60 acceptable; Net 30 or shorter escalate.",
+        "severity": "ok",
+        "rationale": "This Change Order expressly amends Section 4 to Net 60, which matches Iovance's standard position exactly.",
+        "suggestedRedline": ""
+      },
+      {
+        "termKey": "limitation_of_liability",
+        "label": "Limitation of Liability",
+        "found": "Capped at total fees paid in the 12 months preceding the claim; carve-outs for IP infringement, data breach, and indemnification.",
+        "standard": "A cap must be present; for vendors processing PHI/PII a cap of $1M or more is expected.",
+        "severity": "review",
+        "rationale": "A cap is present and carve-outs for data breach are included, which is positive. However, the cap is a rolling 12-month fee look-back whose dollar value is unknown from this document. If Apexion processes PHI or PII and the annual fees are materially below $1M, the cap may be inadequate relative to data sensitivity. The attorney should confirm the expected annual fee run-rate and whether Apexion touches sensitive data before clearing this clause.",
+        "suggestedRedline": "Revise Section 5 to provide that, for any claim arising from a data breach or unauthorized disclosure of personal or health information, each party's aggregate liability shall not be less than [USD $1,000,000 / two times (2x) the fees paid in the preceding twelve months], whichever is greater."
+      },
+      {
+        "termKey": "ip_ownership",
+        "label": "IP Ownership",
+        "found": "Client owns all deliverables and work product; Vendor retains pre-existing platform IP only.",
+        "standard": "Iovance owns deliverables built for it; vendor keeps pre-existing IP.",
+        "severity": "ok",
+        "rationale": "The amended Section 6 assigns all deliverables and work product to Iovance and limits Vendor's retained rights to pre-existing platform IP. This is consistent with Iovance's standard position and aligns with prior passed dispositions (Insmed, Pacific Life Sciences, Syneos Health).",
+        "suggestedRedline": ""
+      },
+      {
+        "termKey": "data_privacy",
+        "label": "Data Processing Addendum",
+        "found": null,
+        "standard": "For vendors touching sensitive data: substantive DPA covering security, subcontractors, and breach recourse must be present.",
+        "severity": "ok",
+        "rationale": "This Change Order does not address data privacy, and as a cloud services amendment it incorporates the parent MSA (IOV-MSA-2024-0142) by reference. DPA obligations are inherited from the parent and need not be restated here. The parent MSA should be reviewed separately to confirm a substantive DPA is in place.",
+        "suggestedRedline": ""
+      },
+      {
+        "termKey": "confidentiality",
+        "label": "Confidentiality",
+        "found": null,
+        "standard": "Mutual NDA surviving 3\u20135 years post-termination.",
+        "severity": "ok",
+        "rationale": "Confidentiality is not addressed in this Change Order. It is inherited from the parent MSA (IOV-MSA-2024-0142) via the incorporation-by-reference clause and the effect-of-change-order savings clause. Not a deviation in this instrument.",
+        "suggestedRedline": ""
+      },
+      {
+        "termKey": "termination",
+        "label": "Termination for Convenience",
+        "found": null,
+        "standard": "Termination for convenience with 30\u201390 days notice; no exit penalty.",
+        "severity": "ok",
+        "rationale": "Termination rights are not addressed in this Change Order. They are inherited from the parent MSA by reference and the savings clause. Not a deviation in this instrument.",
+        "suggestedRedline": ""
+      },
+      {
+        "termKey": "auto_renewal",
+        "label": "Auto-Renewal",
+        "found": null,
+        "standard": "No auto-renewal, or auto-renew with 60+ days opt-out notice.",
+        "severity": "ok",
+        "rationale": "Auto-renewal is not addressed in this Change Order. It is inherited from the parent MSA. Not a deviation in this instrument.",
+        "suggestedRedline": ""
+      },
+      {
+        "termKey": "governing_law",
+        "label": "Governing Law",
+        "found": null,
+        "standard": "Delaware, California, or other US state.",
+        "severity": "ok",
+        "rationale": "Governing law is not stated in this Change Order. It is inherited from the parent MSA (IOV-MSA-2024-0142) by reference. Not a deviation in this instrument.",
+        "suggestedRedline": ""
+      }
+    ],
+    "summary": "This is Change Order No. IOV-CO-2024-0142-02, entered May 2, 2026, amending Master Services Agreement No. IOV-MSA-2024-0142 (March 14, 2024) between Iovance Biotherapeutics, Inc. and Apexion Cloud Services, Inc. The Change Order amends three substantive provisions \u2014 payment terms (to Net 60, which matches Iovance's standard), limitation of liability (rolling 12-month fee cap with data-breach carve-outs), and IP ownership (deliverables to Iovance, vendor keeps pre-existing platform IP) \u2014 and preserves all other MSA terms. Structural amendment mechanics (incorporation by reference, order of precedence, savings clause) are all present and acceptable. No flags requiring immediate escalation were identified. Four items are marked REVIEW and warrant attorney attention before execution: (1) the liability cap's adequacy relative to data sensitivity \u2014 the rolling 12-month fee look-back may be below $1M if Apexion processes PHI/PII; (2) the absence of an entire-agreement/no-oral-modification clause; (3) the absence of a mutual authority-to-execute representation; and (4) the absence of an explicit effective date for the amendments and any invoice schedule, leaving ambiguity about whether outstanding invoices are affected. No total contract value or fee schedule is stated in this Change Order, so invoice arithmetic cannot be verified. Corporate addresses are omitted and should be confirmed against current records.",
+    "contractId": "IOV-CO-2024-0142-02",
+    "parentReference": {
+      "isAmendment": true,
+      "instrumentType": "amendment",
+      "parentContractId": "IOV-MSA-2024-0142",
+      "parentTitle": "Master Services Agreement",
+      "parentDate": "March 14, 2024",
+      "counterpartyEntity": "Apexion Cloud Services, Inc.",
+      "rawReference": "This Change Order is issued under and governed by that certain Master Services Agreement No. IOV-MSA-2024-0142, dated March 14, 2024, between Apexion Cloud Services, Inc. (\"Vendor\") and Iovance Biotherapeutics, Inc. (\"Client\") (the \"Agreement\"), which is incorporated herein by reference."
+    }
+  }
+}

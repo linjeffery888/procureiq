@@ -10,12 +10,14 @@
 // build) which recovers a malformed XRef by rescanning the objects. The known-
 // good files still go through pdf-parse unchanged; only the broken ones reach
 // the fallback. DOCX: mammoth (raw text, formatting discarded; the playbook
-// reads language, not layout). TXT and unknown text types: decoded directly.
+// reads language, not layout). XLSX: SheetJS, each sheet flattened to CSV text so
+// the budget/invoice parsers and the model read the grid like a pasted table.
+// CSV, TXT, and unknown text types: decoded directly.
 //
 // The parsers are marked external in next.config so Next does not try to bundle
 // their native/dynamic requires. Everything here runs in the Node runtime.
 
-export type SupportedKind = "pdf" | "docx" | "txt";
+export type SupportedKind = "pdf" | "docx" | "txt" | "csv" | "xlsx";
 
 export interface ExtractedDoc {
   text: string;
@@ -49,6 +51,21 @@ export function kindFor(fileName: string, mimeType: string): SupportedKind | nul
     mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
   ) {
     return "docx";
+  }
+  // Spreadsheets, checked before the text/* catch-all: a .xlsx is a zipped binary
+  // (SheetJS reads it), while a .csv is plain text but we tag it explicitly so the
+  // delimited-row parsers know to expect a comma grid, not prose.
+  if (
+    name.endsWith(".xlsx") ||
+    name.endsWith(".xlsm") ||
+    name.endsWith(".xls") ||
+    mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mime === "application/vnd.ms-excel"
+  ) {
+    return "xlsx";
+  }
+  if (name.endsWith(".csv") || mime === "text/csv" || mime === "application/csv") {
+    return "csv";
   }
   if (
     name.endsWith(".txt") ||
@@ -105,6 +122,24 @@ async function extractDocx(buffer: Buffer): Promise<string> {
   return result.value || "";
 }
 
+// XLSX/XLS via SheetJS. Each sheet is flattened to CSV text; a multi-sheet
+// workbook gets a "# Sheet: <name>" header per block so the source stays legible.
+// CSV is the most parser- and model-friendly representation of a grid: the
+// delimited-row parsers split on commas, and the model reads it like a table.
+async function extractXlsx(buffer: Buffer): Promise<string> {
+  const XLSX = await import("xlsx");
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const multi = wb.SheetNames.length > 1;
+  const parts: string[] = [];
+  for (const name of wb.SheetNames) {
+    const ws = wb.Sheets[name];
+    if (!ws) continue;
+    const csv = XLSX.utils.sheet_to_csv(ws, { blankrows: false }).trim();
+    if (csv) parts.push(multi ? `# Sheet: ${name}\n${csv}` : csv);
+  }
+  return parts.join("\n\n");
+}
+
 // Main entry: extract text from one uploaded file's bytes. Throws a typed Error
 // with a human-readable message on unsupported type or parse failure, so the
 // route can return a clean per-file error without crashing the batch.
@@ -125,14 +160,19 @@ export async function extractText(
     raw = await extractPdf(buffer);
   } else if (kind === "docx") {
     raw = await extractDocx(buffer);
+  } else if (kind === "xlsx") {
+    raw = await extractXlsx(buffer);
   } else {
+    // csv and txt are both plain text on disk.
     raw = buffer.toString("utf8");
   }
 
   const { text, truncated } = clamp(raw);
   if (!text) {
     throw new Error(
-      `No readable text found in "${fileName}". A scanned PDF may need OCR, which the prototype does not run.`
+      kind === "xlsx" || kind === "csv"
+        ? `No rows found in "${fileName}". The spreadsheet looks empty.`
+        : `No readable text found in "${fileName}". A scanned PDF may need OCR, which the prototype does not run.`
     );
   }
 

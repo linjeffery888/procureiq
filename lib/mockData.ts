@@ -20,12 +20,12 @@ by and between Iovance Biotherapeutics, Inc. ("Client") and CryoLogix Cold Chain
 Solutions, LLC ("Vendor").
 
 1. SERVICES. Vendor will provide cryogenic shipping and cold-chain monitoring
-services for cell therapy logistics as described in each Statement of Work.
+services for cell therapy logistics as described in each applicable work order.
 
 2. TERM. This Agreement begins on the Effective Date and continues for a period
 of twenty-four (24) months. This Agreement shall automatically renew for
-successive one (1) year terms unless either party provides written notice of
-non-renewal at least thirty (30) days prior to the end of the then-current term.
+successive one (1) year terms unless either party provides written notice not to
+renew at least thirty (30) days prior to the end of the then-current term.
 
 3. FEES AND PAYMENT. Client shall pay all undisputed invoices within fifteen (15)
 days of receipt. Total contract value is not to exceed $480,000 over the initial term.
@@ -71,30 +71,141 @@ Data Processing Agreement is attached.
 
 8. GOVERNING LAW. Governed by the laws of England and Wales.`;
 
-// Synthetic change order that exercises the amendment path. It mirrors the
-// patterns in the real redlined sample (do NOT put the real text in the repo):
-// a long backdated effective date to flag, a missing order-of-precedence clause,
-// and an imprecise vendor entity (names the parent, not the contracting
-// affiliate). The amendment-layer rules and the key-date / corporate-address
-// consistency checks should fire on this one, not the full commercial review.
-export const SAMPLE_CHANGE_ORDER = `CHANGE ORDER NO. 3 TO STATEMENT OF WORK
+// A FULL CLEAN PASS: a routine SaaS subscription renewal that clears every one of
+// the eight playbook clauses (Net 60, a 12-month-of-fees liability cap, vendor
+// keeps only its pre-existing platform IP, 5-year confidentiality, a convenience
+// exit, auto-renew with 90 days' opt-out notice, personal data under a DPA, and
+// Delaware law). This is the boring, correct paper the first pass should clear
+// without escalating, so the demo shows the system passing clean work, not only
+// flagging deviations. Standalone (cites no parent); all parties are synthetic.
+export const SAMPLE_SAAS_RENEWAL = `SOFTWARE LICENSE AND SUBSCRIPTION AGREEMENT
 
-This Change Order ("Change Order") is entered into as of April 9, 2026, and is
-made effective as of April 1, 2025, by and between Iovance Biotherapeutics, Inc.
-and Sentinel Managed Services (the "Vendor").
+This Software License and Subscription Agreement ("Agreement") is entered into as
+of February 1, 2026 by and between: Nimbus Observability, Inc. ("Vendor"); and
+Iovance Biotherapeutics, Inc. ("Client"). This Agreement renews the parties' prior
+subscription and restates the standard terms in full below.
 
-1. PURPOSE. This Change Order amends Statement of Work No. 2 (WO-2255) under the
-Master Services Agreement for managed infrastructure services. All terms not
-expressly amended herein remain in full force and effect.
+1. SUBSCRIPTION. Vendor grants Client a subscription to its cloud observability and
+log-analytics platform supporting Client's IT operations.
 
-2. SCOPE CHANGE. Vendor will add after-hours monitoring coverage and one
-additional managed endpoint tier, retroactive to the effective date above.
+2. TERM. The subscription term is twenty-four (24) months from the Effective Date.
+The Agreement automatically renews for successive twelve-month terms unless either
+party provides ninety (90) days' prior written notice that it elects not to renew.
 
-3. FEES. The not-to-exceed value of Statement of Work No. 2 is increased by
-$18,000, from $60,000 to $78,000. Invoices shall follow the schedule in the
-underlying Statement of Work.
+3. FEES AND PAYMENT. The annual subscription fee is $180,000. Client shall pay all
+undisputed invoices Net sixty (60) days from receipt of invoice.
 
-4. SIGNATURES. Executed by the authorized representatives of the parties.`;
+4. LIMITATION OF LIABILITY. Each party's aggregate liability under this Agreement
+shall not exceed $2,000,000 (two million dollars), with customary carve-outs for
+confidentiality and data breach. The parties set this cap in light of the personal
+data the platform processes.
+
+5. INTELLECTUAL PROPERTY. Vendor retains all right, title, and interest in and to
+its pre-existing platform and any improvements thereto. Client owns all right,
+title, and interest in its data and configurations. This is a subscription to
+Vendor's platform and creates no bespoke deliverables or custom work product, so no
+ownership question arises over assets built for Client.
+
+6. CONFIDENTIALITY. Each party shall protect the other's confidential information
+for a period of five (5) years following termination.
+
+7. DATA PRIVACY. The platform processes personal data of Client personnel under a
+Data Processing Agreement (DPA) included in this Agreement. The DPA requires Vendor
+to encrypt the data to Client's standards, to maintain a current list of
+subprocessors and notify Client before engaging any new subprocessor, and to notify
+Client of any data breach without undue delay and within seventy-two (72) hours,
+with defined remediation obligations.
+
+8. TERMINATION. Client may terminate this Agreement for convenience upon ninety (90)
+days prior written notice.
+
+9. GOVERNING LAW. This Agreement is governed by the laws of the State of Delaware,
+without regard to its conflict of laws principles.`;
+
+// A LINKED contract family: a parent MSA that fails three clauses and the change
+// order that remediates every one of them. Reviewed alone, the change order
+// looks clean (it carries its untouched terms from the parent), so the truth
+// only appears once the two are evaluated as one unit. This pair is what proves
+// the contract-family intelligence end to end: the resolver links the child to
+// the parent by Contract No. (not vendor name), and the unit evaluation overlays
+// the child's restated clauses onto the parent baseline so the parent's flags
+// resolve. All parties, numbers, and the Apexion vendor are synthetic.
+
+// Parent: fails on payment (Net 15), liability (uncapped), and IP (vendor owns
+// the deliverables). Prints its own Contract No. so the change order can cite it.
+export const SAMPLE_PARENT_MSA = `Contract No.: IOV-MSA-2024-0142
+
+MASTER SERVICES AGREEMENT
+
+This Master Services Agreement ("Agreement") is entered into as of March 14, 2024
+by and between Iovance Biotherapeutics, Inc. ("Client") and Apexion Cloud
+Services, Inc. ("Vendor").
+
+1. SERVICES. Vendor will provide cloud hosting and managed platform services for
+Iovance's cell therapy data systems, as described in one or more statements of
+work issued under this Agreement.
+
+2. TERM. This Agreement begins on the Effective Date and continues for a period of
+twenty-four (24) months. This Agreement does not automatically renew; continuation
+beyond the initial term requires a new written agreement signed by both parties.
+
+3. FEES AND PAYMENT. Client shall pay all undisputed invoices within fifteen (15)
+days of receipt. Total contract value is not to exceed $640,000 over the initial
+term.
+
+4. LIMITATION OF LIABILITY. There shall be no limitation on Vendor's aggregate
+liability under this Agreement, and Vendor shall be liable for all damages arising
+out of or relating to its performance.
+
+5. INTELLECTUAL PROPERTY. All work product, data, and deliverables created under
+this Agreement shall be the sole property of Vendor, who grants Client a
+non-exclusive, non-transferable license to use such deliverables.
+
+6. CONFIDENTIALITY. Each party agrees to protect the other's confidential
+information for a period of five (5) years following termination.
+
+7. TERMINATION. Either party may terminate this Agreement for convenience upon
+sixty (60) days prior written notice, and for material breach upon thirty (30)
+days written notice and opportunity to cure.
+
+8. GOVERNING LAW. This Agreement shall be governed by the laws of the State of
+Delaware, without regard to its conflict of laws principles.`;
+
+// Child: cites the parent's Contract No. exactly, incorporates it by reference
+// with an order-of-precedence clause, and restates Sections 4, 5, and 6 with
+// passing values (Net 60, a 12-month-of-fees cap, Iovance owns the deliverables).
+// Every clause it touches flips the parent's flag to a pass in the unit view.
+export const SAMPLE_CHANGE_ORDER = `Change Order No.: IOV-CO-2024-0142-02
+
+CHANGE ORDER
+
+This Change Order ("Change Order") is entered into as of May 2, 2026 by and
+between Iovance Biotherapeutics, Inc. ("Client") and Apexion Cloud Services, Inc.
+("Vendor").
+
+REFERENCE TO PARENT AGREEMENT. This Change Order is issued under and governed by
+that certain Master Services Agreement No. IOV-MSA-2024-0142, dated March 14,
+2024, between Apexion Cloud Services, Inc. ("Vendor") and Iovance Biotherapeutics,
+Inc. ("Client") (the "Agreement"), which is incorporated herein by reference. In
+the event of any conflict, the order of precedence is this Change Order, then the
+Agreement.
+
+1. AMENDED PAYMENT TERMS. Section 4 (Fees and Payment) of the Agreement is amended
+so that Client shall pay all undisputed invoices within sixty (60) days of receipt
+(Net 60).
+
+2. AMENDED LIMITATION OF LIABILITY. Section 5 is amended so that each party's
+aggregate liability shall not exceed the total fees paid in the twelve (12) months
+preceding the claim, with carve-outs for infringement of intellectual property,
+data breach, and indemnification obligations.
+
+3. AMENDED INTELLECTUAL PROPERTY. Section 6 is amended so that the Client owns all
+right, title, and interest in the deliverables and work product created under the
+Agreement, and Vendor retains only its pre-existing platform intellectual
+property.
+
+4. EFFECT OF CHANGE ORDER. Except as expressly amended herein, all terms and
+conditions of the Agreement remain in full force and effect.`;
 
 // =====================================================================
 // BUDGETIQ purchase orders, invoices, budget lines
@@ -138,8 +249,51 @@ export const INVOICES: Invoice[] = [
   { invoiceNumber: "INV-9003", vendor: "Sentinel Managed Services", amount: 14000, poNumberClaimed: "PO-44160", lineItems: ["June managed services", "Overage: after-hours support"], receivedDate: "2026-06-17" },
   // Clearly over remaining: likely the wrong bucket or a missing PO amendment.
   { invoiceNumber: "INV-9009", vendor: "Helix Analytics", amount: 700000, poNumberClaimed: "PO-44135", lineItems: ["Enterprise license, multi-year prepay"], receivedDate: "2026-06-18" },
+  // Wrong PO: the invoice cites a REAL PO that belongs to a DIFFERENT vendor.
+  // Ben's exact failure mode (the PO says one vendor, the invoice is from
+  // another). The cited PO exists, so this is not a no_po; the vendor-mismatch
+  // guard in matching.ts routes it to a human to reassign and never auto-clears
+  // a payment against the wrong PO. PO-44135 belongs to Helix, not Veritas.
+  { invoiceNumber: "INV-9011", vendor: "Veritas Cloud Infrastructure", amount: 20000, poNumberClaimed: "PO-44135", lineItems: ["August compute reservation"], receivedDate: "2026-06-19" },
   // No open PO for this vendor at all: needs manual sourcing.
   { invoiceNumber: "INV-9004", vendor: "Quantum Logistics Partners", amount: 30000, poNumberClaimed: null, lineItems: ["Specimen courier, May"], receivedDate: "2026-06-16" },
+];
+
+// A realistic batch of uploaded invoices that cite the PO register (PO-2026-###),
+// for the "Try a sample" shortcut. They load straight into the upload queue and
+// are triaged against the full register ("all" dataset), so the DETERMINISTIC
+// engine matches most of them by exact PO and catches the exceptions by rule; the
+// AI is left only to draft triage prose, not to resolve everything. That keeps the
+// "deterministic engine is the first step" story visible on real invoices.
+//
+// The set deliberately spans every deterministic outcome:
+//   - exact PO + vendor + within budget -> matched by rule (most rows)
+//   - INV-AL over the PO's remaining     -> over_budget by rule
+//   - INV-CV / INV-GN cite a real PO that belongs to ANOTHER vendor -> wrong-PO
+//     vendor mismatch, routed to a human by rule (Ben's exact failure mode)
+//   - the BlueVector pair (the original, then its -R revision) demonstrates the
+//     deterministic dedup / revision catch: the -R is flagged as superseding the
+//     original, which sits just before it in the batch.
+export const SAMPLE_UPLOAD_INVOICES: Invoice[] = [
+  { invoiceNumber: "INV-AC-2026-0505", vendor: "Apexion Cloud Services", amount: 8300, poNumberClaimed: "PO-2026-003", lineItems: ["April cloud capacity"], receivedDate: "2026-05-05" },
+  // Exact PO + vendor, but $123,678 exceeds the PO's remaining -> over_budget by rule.
+  { invoiceNumber: "INV-AL-2026-0618", vendor: "Alloy Software Systems", amount: 123678, poNumberClaimed: "PO-2026-013", lineItems: ["Enterprise license, annual"], receivedDate: "2026-06-18" },
+  // BlueVector pair: the original first, then its -R revision. The revision's dedup
+  // check finds the original earlier in the batch and flags that it supersedes it,
+  // so the prior version is not also paid.
+  { invoiceNumber: "INV-BL-2026-1121", vendor: "BlueVector Genomics", amount: 84200, poNumberClaimed: "PO-2026-112", lineItems: ["Sequencing pipeline, Q4"], receivedDate: "2026-11-21" },
+  { invoiceNumber: "INV-BL-2026-1121-R", vendor: "BlueVector Genomics", amount: 89400, poNumberClaimed: "PO-2026-112", lineItems: ["Sequencing pipeline, Q4 (revised)"], receivedDate: "2026-12-02" },
+  { invoiceNumber: "INV-BR-2026-0710", vendor: "BioReliance QC Systems", amount: 26214, poNumberClaimed: "PO-2026-137", lineItems: ["Release + stability testing, June"], receivedDate: "2026-07-10" },
+  // Cites a real PO that belongs to a DIFFERENT vendor (PO-2026-138 is TitanSecure IT):
+  // the deterministic vendor-mismatch guard routes it to a human (wrong PO).
+  { invoiceNumber: "INV-CV-2026-0325", vendor: "CryoVault Logistics", amount: 7075, poNumberClaimed: "PO-2026-138", lineItems: ["Specimen cold storage, March"], receivedDate: "2026-03-25" },
+  // Same wrong-PO failure mode (PO-2026-032 is VitalLink EHR Systems).
+  { invoiceNumber: "INV-GN-2026-0616", vendor: "GenomeNext Bioinformatics", amount: 118600, poNumberClaimed: "PO-2026-032", lineItems: ["Variant analysis platform, Q2"], receivedDate: "2026-06-16" },
+  { invoiceNumber: "INV-FL-2027-0420", vendor: "FlowMetric Cytometry", amount: 15265, poNumberClaimed: "PO-2026-019", lineItems: ["Flow cytometry panel run"], receivedDate: "2027-04-20" },
+  { invoiceNumber: "INV-HR-2026-0301", vendor: "Horizon Regulatory Advisors", amount: 79044, poNumberClaimed: "PO-2026-134", lineItems: ["Regulatory submission support, Q1"], receivedDate: "2026-03-01" },
+  { invoiceNumber: "INV-LC-2026-0818_39", vendor: "CryoVault Logistics", amount: 10770, poNumberClaimed: "PO-2026-001", lineItems: ["Courier + cold storage, August"], receivedDate: "2026-08-18" },
+  { invoiceNumber: "INV-MS-2026-0607", vendor: "Meridian CDMO Solutions", amount: 43500, poNumberClaimed: "PO-2026-104", lineItems: ["Fill-finish batch, June"], receivedDate: "2026-06-07" },
+  { invoiceNumber: "INV-NE-2026-1111", vendor: "NeuroSphere AI", amount: 162358, poNumberClaimed: "PO-2026-025", lineItems: ["ML platform license, annual"], receivedDate: "2026-11-11" },
 ];
 
 export const BUDGET_LINES: VendorBudgetLine[] = [
@@ -163,6 +317,18 @@ export const BUDGET_LINES: VendorBudgetLine[] = [
     monthlyExpected: [12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000],
     actualsToDate: [12000, 12000, 14000, 12000, 13000, 0, 0, 0, 0, 0, 0, 0],
     paymentSchedule: "Monthly, variable (usage-based)",
+  },
+  // A per-batch QC vendor: predictable cadence but no fixed monthly amount, and the
+  // release-testing invoice usually lands AFTER quarter close. So its close-month
+  // accrual is a true ESTIMATE, trued up when the invoice posts. This is the
+  // late-actual case finance described, and the line that exercises the explicit
+  // "estimate, true-up" state in the accrual draft (vs scheduled / outreach / actual).
+  {
+    vendor: "BioReliance QC Labs",
+    annualBudget: 180000,
+    monthlyExpected: [15000, 15000, 15000, 15000, 15000, 15000, 15000, 15000, 15000, 15000, 15000, 15000],
+    actualsToDate: [15000, 0, 18000, 12000, 15000, 0, 0, 0, 0, 0, 0, 0],
+    paymentSchedule: "Per batch, ~$15,000/mo (invoiced after testing)",
   },
 ];
 

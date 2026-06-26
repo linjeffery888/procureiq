@@ -4,12 +4,16 @@ import { extractJsonObject } from "@/lib/normalizeExtraction";
 import {
   BudgetIngestLine,
   BudgetIngestResponse,
+  BudgetPlanIngestResponse,
   IngestMeta,
   Invoice,
   InvoiceIngestResponse,
+  VendorBudgetLine,
 } from "@/lib/types";
 import { checkDuplicate } from "@/lib/dedup";
 import { addUpload, clearAllUploads, uploadsAsLedger } from "@/lib/uploadStore";
+import { parseBudgetTable, parseActualsTable, spreadAnnual, vendorKey } from "@/lib/budgetParse";
+import { anthropicApiKey } from "@/lib/anthropicKey";
 
 // The document-ingest engine for BudgetIQ. It turns the raw text of an uploaded
 // PDF (already extracted by /api/upload) into the structured rows the working
@@ -33,7 +37,7 @@ export const maxDuration = 60;
 const MODEL = "claude-sonnet-4-6";
 const MAX_INPUT_CHARS = 40000;
 
-type IngestKind = "invoice" | "budget";
+type IngestKind = "invoice" | "budget" | "budget-plan";
 
 const INVOICE_SYSTEM = `You read a single vendor invoice (text extracted from a PDF) and return its key fields as JSON for the accounts-payable matching queue at Iovance Biotherapeutics. A human approves every invoice before it clears.
 
@@ -69,6 +73,26 @@ Rules:
 - period: the reporting period the document covers, e.g. "June 2026", or null.
 - Ignore total, subtotal, and budget-column rows and any column headers; return only real per-vendor spend figures.
 - Base every figure on the document text only.`;
+
+// Used only for an UNSTRUCTURED (prose PDF) budget. A clean CSV/XLSX budget is
+// read by the deterministic table parser (lib/budgetParse) with no model call;
+// the model is the fallback when that parser finds no rows. This is the budget
+// ITSELF (the plan), not actual spend.
+const BUDGET_PLAN_SYSTEM = `You read an annual VENDOR BUDGET (text extracted from a PDF, spreadsheet, or CSV) and return one entry per vendor as JSON, so a budget analyst does not re-key the budget by hand. This is for Iovance Biotherapeutics' IT budget. This is the PLANNED budget itself, not actual spend.
+
+Return ONLY valid JSON, no prose, no markdown fences, matching this exact shape:
+{
+  "period": string | null,
+  "lines": [{ "vendor": string, "annualBudget": number | null, "monthly": number[] | null, "paymentSchedule": string | null }]
+}
+
+Rules:
+- One entry per vendor. vendor is the vendor name exactly as printed.
+- annualBudget: the vendor's total planned budget for the year as a number, no currency symbol and no commas. Null only if the document gives no annual figure.
+- monthly: if the document breaks the budget out by month, an array of EXACTLY 12 numbers, January through December. Null if no monthly breakdown is stated.
+- paymentSchedule: a short description of the billing cadence if stated, e.g. "Monthly, $20,000" or "Quarterly". Empty string if not stated.
+- Ignore total, subtotal, and column-header rows. Return only real per-vendor budget figures.
+- Base every figure on the document text only. Do not invent vendors or amounts.`;
 
 function meta(engine: IngestMeta["engine"], model: string | null, latencyMs: number, note: string): IngestMeta {
   return { engine, model, latencyMs, note };
@@ -204,6 +228,19 @@ function offlineInvoice(raw: string): Invoice {
 
 function offlineBudget(raw: string): BudgetIngestLine[] {
   const text = raw.replace(/\r/g, "");
+  // Table-first: a CSV/XLSX actuals export (vendor + amount columns, often a
+  // dump of loose invoices for the period) is read deterministically, the same
+  // way the budget plan is. Falls back to the prose scan below for figures laid
+  // out on letterhead ("Vendor Name .... $20,000").
+  const table = parseActualsTable(text);
+  if (table.length > 0) {
+    return table.map((t) => ({
+      vendor: t.vendor,
+      amount: t.amount,
+      period: t.period,
+      note: t.period ? `${t.period} figure` : "uploaded figure",
+    }));
+  }
   const period = text.match(/period\s*:?\s*([^\n]{3,40})/i)?.[1]?.trim() ?? null;
   const lines: BudgetIngestLine[] = [];
   for (const line of text.split(/\n/)) {
@@ -250,6 +287,123 @@ function normalizeBudget(parsed: any): BudgetIngestLine[] {
   return out;
 }
 
+// Build one VendorBudgetLine from a vendor + an annual figure and/or a 12-month
+// breakdown. A stated 12-month array wins; otherwise the annual is spread across
+// the year so a budget given only as a yearly number still drives the accrual
+// math. Returns null when there is no usable amount.
+function buildBudgetLine(
+  vendor: string,
+  annual: number | null,
+  monthly: number[] | null,
+  schedule: string | null,
+): VendorBudgetLine | null {
+  let monthlyExpected: number[];
+  let annualBudget: number;
+  const validMonthly = Array.isArray(monthly) && monthly.length === 12 && monthly.some((n) => Number(n) > 0);
+  if (validMonthly) {
+    monthlyExpected = (monthly as number[]).map((n) => Math.round(Number(n) || 0));
+    annualBudget = annual && annual > 0 ? Math.round(annual) : monthlyExpected.reduce((a, b) => a + b, 0);
+  } else if (annual && annual > 0) {
+    annualBudget = Math.round(annual);
+    monthlyExpected = spreadAnnual(annualBudget);
+  } else {
+    return null;
+  }
+  return {
+    vendor,
+    annualBudget,
+    monthlyExpected,
+    actualsToDate: new Array(12).fill(0),
+    paymentSchedule: schedule?.trim() || `Monthly, $${Math.round(annualBudget / 12).toLocaleString()}`,
+  };
+}
+
+// Coerce the model's prose-budget JSON into VendorBudgetLine rows, deduping by
+// normalized vendor (the first line for a vendor wins, mirroring the table parser).
+function normalizeBudgetPlan(parsed: any): { lines: VendorBudgetLine[]; period: string | null } {
+  const period = str(parsed?.period);
+  const raw = Array.isArray(parsed?.lines) ? parsed.lines : [];
+  const lines: VendorBudgetLine[] = [];
+  const seen = new Set<string>();
+  for (const r of raw) {
+    const vendor = str(r?.vendor);
+    if (!vendor) continue;
+    const key = vendorKey(vendor);
+    if (!key || seen.has(key)) continue;
+    const monthly = Array.isArray(r?.monthly) ? r.monthly.map((x: unknown) => num(x) ?? 0) : null;
+    const line = buildBudgetLine(vendor, num(r?.annualBudget), monthly, str(r?.paymentSchedule));
+    if (!line) continue;
+    seen.add(key);
+    lines.push(line);
+  }
+  return { lines, period };
+}
+
+// The reporting period / fiscal year a budget document states, if any. Surfaced
+// in the response so the planner sees what year the uploaded budget covers.
+function readBudgetPeriod(text: string): string | null {
+  const m = text.match(/(?:period|fiscal\s*year|budget\s*year|for\s+(?:fy|the\s+(?:year|period)))\s*:?\s*([^\n,]{2,40})/i);
+  return m ? m[1].trim() : null;
+}
+
+// Parse an uploaded BUDGET (the plan itself) into VendorBudgetLine rows.
+// Deterministic-first: a CSV/XLSX/whitespace budget table is read exactly by the
+// rules parser with no API round-trip (the common case). The model is the
+// fallback ONLY when that parser finds no rows, i.e. an unstructured prose PDF
+// budget. Always returns a BudgetPlanIngestResponse stating which engine ran.
+async function handleBudgetPlan(input: string, forceOffline: boolean, started: number): Promise<NextResponse> {
+  const period = readBudgetPeriod(input);
+  const respond = (lines: VendorBudgetLine[], p: string | null, warnings: string[], m: IngestMeta) => {
+    const res: BudgetPlanIngestResponse = { lines, period: p, warnings, _meta: m };
+    return NextResponse.json(res);
+  };
+
+  // Deterministic table parse (handles the quoted-comma CSV that SheetJS emits).
+  const table = parseBudgetTable(input);
+  if (table.lines.length > 0) {
+    const note = table.headerFound
+      ? `Deterministic table parse: read ${table.lines.length} vendor budget line(s) from the uploaded spreadsheet by column header, with no model call. Finance confirms before it replaces the live budget.`
+      : `Deterministic parse: read ${table.lines.length} vendor budget line(s) from the uploaded list (no header row found, so the first text column was taken as the vendor and the largest number as the annual budget). Finance confirms before it replaces the live budget.`;
+    return respond(table.lines, period, table.warnings, meta("offline-heuristic", null, Date.now() - started, note));
+  }
+
+  // No structured rows: a prose budget. Fall back to the model when live.
+  const apiKey = anthropicApiKey();
+  if (forceOffline || !apiKey) {
+    const why = forceOffline
+      ? "Offline heuristic mode: the Engine toggle is set to Offline, so the model fallback for an unstructured budget was not run."
+      : "Offline heuristic mode: no ANTHROPIC_API_KEY set, so the model fallback for an unstructured budget was not run. Upload a CSV/XLSX with a vendor column and a budget amount, or set a key in .env.local.";
+    const warnings = table.warnings.length ? table.warnings : ["No budget rows could be read from the document."];
+    return respond([], period, warnings, meta("offline-heuristic", null, Date.now() - started, why));
+  }
+
+  try {
+    const client = new Anthropic({ apiKey });
+    const msg = await client.messages.create({
+      model: MODEL,
+      max_tokens: 2500,
+      temperature: 0,
+      system: BUDGET_PLAN_SYSTEM,
+      messages: [{ role: "user", content: `DOCUMENT:\n"""\n${input}\n"""` }],
+    });
+    const rawText = msg.content
+      .filter((b) => b.type === "text")
+      .map((b: any) => b.text)
+      .join("");
+    const parsed = extractJsonObject(rawText);
+    if (parsed == null) {
+      return respond([], period, [...table.warnings, "The live model response could not be parsed as JSON."],
+        meta("offline-heuristic", null, Date.now() - started, "The deterministic parser found no rows and the live model response could not be parsed as JSON. Re-run to retry the live engine."));
+    }
+    const { lines, period: modelPeriod } = normalizeBudgetPlan(parsed);
+    return respond(lines, modelPeriod ?? period, table.warnings,
+      meta("live", MODEL, Date.now() - started, `Live parse by ${MODEL}: read ${lines.length} vendor budget line(s) from an unstructured (prose) budget. Finance confirms before it replaces the live budget.`));
+  } catch (err: any) {
+    return respond([], period, [...table.warnings, `Live engine unavailable (${err?.message ?? "API error"}).`],
+      meta("offline-heuristic", null, Date.now() - started, "The deterministic parser found no rows and the live engine was unavailable; nothing was parsed."));
+  }
+}
+
 export async function POST(req: NextRequest) {
   const started = Date.now();
 
@@ -260,6 +414,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     if (body?.kind === "budget") kind = "budget";
+    else if (body?.kind === "budget-plan") kind = "budget-plan";
     text = typeof body?.text === "string" ? body.text : "";
     forceOffline = body?.forceOffline === true;
     if (typeof body?.sourceName === "string" && body.sourceName.trim()) {
@@ -288,6 +443,13 @@ export async function POST(req: NextRequest) {
   }
   const input = text.slice(0, MAX_INPUT_CHARS);
 
+  // Budget-plan (the budget itself) is deterministic-first with a model fallback,
+  // a different shape from the invoice/budget-actuals paths below, so it is
+  // handled in full here before the shared offline/live invoice logic.
+  if (kind === "budget-plan") {
+    return handleBudgetPlan(input, forceOffline, started);
+  }
+
   const offlineResponse = (note: string) => {
     if (kind === "budget") {
       const res: BudgetIngestResponse = { lines: offlineBudget(input), _meta: meta("offline-heuristic", null, Date.now() - started, note) };
@@ -296,10 +458,14 @@ export async function POST(req: NextRequest) {
     return finalizeInvoice(offlineInvoice(input), meta("offline-heuristic", null, Date.now() - started, note));
   };
 
+  // Resolve the key once, the same way for the gate and the live client, so an
+  // empty ANTHROPIC_API_KEY in the shell can't shadow the real key in .env.local.
+  const apiKey = anthropicApiKey();
+
   // --- Offline path: no key, or the Engine toggle forced it. ---
-  if (forceOffline || !process.env.ANTHROPIC_API_KEY) {
+  if (forceOffline || !apiKey) {
     return offlineResponse(
-      forceOffline && process.env.ANTHROPIC_API_KEY
+      forceOffline && apiKey
         ? "Offline heuristic mode: the Engine toggle is set to Offline, so this PDF was parsed by deterministic pattern matching, not the model. Switch the toggle to Live for the Claude parse."
         : "Offline heuristic mode: no ANTHROPIC_API_KEY set, so this PDF was parsed by deterministic pattern matching, not the model. Set a key in .env.local for the live Claude parse.",
     );
@@ -307,7 +473,7 @@ export async function POST(req: NextRequest) {
 
   // --- Live path: ask Claude to parse, fall back to the heuristic on any failure. ---
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const client = new Anthropic({ apiKey });
     const msg = await client.messages.create({
       model: MODEL,
       max_tokens: 1500,

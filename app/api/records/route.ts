@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { saveRecord, listRecords, clearRecords } from "@/lib/recordStore";
+import { saveRecord, listRecords, clearRecords, deleteRecord, RecordClearance } from "@/lib/recordStore";
 import { ContractExtraction } from "@/lib/types";
 
 // The shared-record API: the one place the two modules meet. ContractIQ POSTs a
@@ -31,6 +31,16 @@ function toExtraction(input: any): ContractExtraction {
   };
 }
 
+// Coerce the commit body's clearance block into the stored shape, or null if the
+// caller did not send one (legacy / direct commits).
+function toClearance(input: any): RecordClearance | null {
+  if (!input || typeof input !== "object") return null;
+  const status = input.status === "human-accepted" ? "human-accepted" : input.status === "clean-pass" ? "clean-pass" : null;
+  if (!status) return null;
+  const n = (v: any) => (typeof v === "number" && v >= 0 ? Math.floor(v) : 0);
+  return { status, flags: n(input.flags), reviews: n(input.reviews), accepted: n(input.accepted), dismissed: n(input.dismissed) };
+}
+
 export async function GET() {
   return NextResponse.json({ records: await listRecords() });
 }
@@ -48,11 +58,22 @@ export async function POST(req: NextRequest) {
   }
   const extraction = toExtraction(source);
   const sourceName = typeof body?.sourceName === "string" ? body.sourceName : "reviewed contract";
-  const record = await saveRecord(extraction, sourceName);
+  const clearance = toClearance(body?.clearance);
+  const record = await saveRecord(extraction, sourceName, clearance);
   return NextResponse.json({ record, records: await listRecords() });
 }
 
-export async function DELETE() {
+// DELETE removes one record when ?id= is supplied (undo a mistaken commit), or
+// clears the whole store when no id is given.
+export async function DELETE(req: NextRequest) {
+  const id = req.nextUrl.searchParams.get("id");
+  if (id) {
+    const removed = await deleteRecord(id);
+    if (!removed) {
+      return NextResponse.json({ error: `No record with id ${id}.`, records: await listRecords() }, { status: 404 });
+    }
+    return NextResponse.json({ records: await listRecords() });
+  }
   await clearRecords();
   return NextResponse.json({ records: [] });
 }

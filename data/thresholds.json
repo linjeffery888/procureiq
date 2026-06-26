@@ -1,0 +1,6 @@
+{
+  "minNetDays": 0,
+  "minLiabilityCap": 500000,
+  "minConfidentialityYears": 3,
+  "minOptOutNoticeDays": 60
+}
