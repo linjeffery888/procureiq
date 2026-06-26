@@ -364,11 +364,11 @@ export const SAMPLE_BUDGET_PDF_TEXT = `IOVANCE IT, Q2 VENDOR ACTUALS (Finance ex
 Period: June 2026
 
 Vendor                              June actual
-CryoLogix Cold Chain Solutions      $20,000
-Helix Analytics                     $18,333
-Sentinel Managed Services           $13,500
+Apexion Cloud Services              $131,000
+Veritas Data Corp                   $94,200
+Meridian CDMO Solutions             $762,000
 
-Total                               $51,833`;
+Total                               $987,200`;
 
 // =====================================================================
 // KNOWLEDGE seed precedents (the RAG corpus, all synthetic)
