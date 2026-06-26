@@ -2,7 +2,10 @@ services:
   - type: web
     name: procureiq
     runtime: node
-    plan: free
+    # Disks require a paid instance (Free has no persistent storage). Starter is
+    # the cheapest with a disk; bump to "standard" (2GB RAM) if you want the
+    # neural embedder (Xenova/all-MiniLM) instead of the lexical fallback.
+    plan: starter
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /
@@ -10,7 +13,13 @@ services:
       - key: NODE_VERSION
         value: "20.11.1"
       # Optional. Without it, the offline extraction engine handles contract
-      # parsing and the corpus uses local/lexical embeddings. Set in the Render
-      # dashboard (never commit a real key).
+      # parsing. Set in the Render dashboard (never commit a real key).
       - key: ANTHROPIC_API_KEY
         sync: false
+    # Persistent memory: the corpus (data/corpus.json), upload queue, and
+    # committed records are written here at runtime and survive restarts and
+    # redeploys. cwd on Render is /opt/render/project/src, so this is cwd/data.
+    disk:
+      name: procureiq-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
