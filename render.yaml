@@ -1,10 +1,27 @@
+# Render Blueprint for the ProcureIQ demo.
+#
+# Deploy:
+#   1. dashboard.render.com -> New + -> Blueprint
+#   2. Connect this GitHub repo; Render reads this file and creates the service.
+#   3. In the service's Environment tab, set ANTHROPIC_API_KEY (it's sync:false,
+#      so it is NEVER stored in the repo — you paste it into Render directly).
+#      Optional: without a key the app still runs on the deterministic offline
+#      engine, and the bundled samples (incl. the pinned Apexion change order)
+#      still render.
+#   4. Render builds and gives a public URL (e.g. https://procureiq.onrender.com).
+#
+# Stateless by design: no persistent disk. The seed data (POs, budget,
+# thresholds, the pinned sample) ships in the repo; "Run demo" regenerates the
+# runtime state (reviews, matches, accruals) on each session. A mounted disk
+# would shadow the committed data/ files on first boot and break the demo, so we
+# omit it.
 services:
   - type: web
     name: procureiq
     runtime: node
-    # Disks require a paid instance (Free has no persistent storage). Starter is
-    # the cheapest with a disk; bump to "standard" (2GB RAM) if you want the
-    # neural embedder (Xenova/all-MiniLM) instead of the lexical fallback.
+    # "starter" = always-on, ~$7/mo, no cold starts (best for a live demo a
+    # reviewer may open anytime). Change to "free" in the dashboard for $0 — it
+    # works, but spins down after ~15 min idle and takes ~50s to wake.
     plan: starter
     buildCommand: npm install && npm run build
     startCommand: npm start
@@ -12,14 +29,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20.11.1"
-      # Optional. Without it, the offline extraction engine handles contract
-      # parsing. Set in the Render dashboard (never commit a real key).
+      # Paste the key in the Render dashboard (Environment tab). Never commit it.
       - key: ANTHROPIC_API_KEY
         sync: false
-    # Persistent memory: the corpus (data/corpus.json), upload queue, and
-    # committed records are written here at runtime and survive restarts and
-    # redeploys. cwd on Render is /opt/render/project/src, so this is cwd/data.
-    disk:
-      name: procureiq-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
