@@ -11,9 +11,21 @@ quarter-close accrual. Two modules over one shared record:
 
 Prototype on **synthetic data only** — no real contracts, vendors, or financials.
 
-## Run it locally
+## Quickstart (macOS)
 
-Requires **Node 20+**.
+```bash
+git clone https://github.com/linjeffery888/procureiq.git
+cd procureiq
+./setup.sh         # checks for Node 20+ (installs it via Homebrew if missing), installs deps, builds
+npm run demo       # serves http://localhost:3000
+```
+
+`setup.sh` is safe to re-run. If you don't have Homebrew it'll tell you the one
+link to grab Node from, then re-run it.
+
+## Run it manually
+
+Requires **Node 20+** (`node -v` to check; install from https://nodejs.org or `brew install node`).
 
 ```bash
 git clone https://github.com/linjeffery888/procureiq.git
