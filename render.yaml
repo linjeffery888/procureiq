@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: procureiq
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "20.11.1"
+      # Optional. Without it, the offline extraction engine handles contract
+      # parsing and the corpus uses local/lexical embeddings. Set in the Render
+      # dashboard (never commit a real key).
+      - key: ANTHROPIC_API_KEY
+        sync: false
