@@ -108,11 +108,27 @@ function findMonths(text: string): number | null {
 }
 
 function findValue(text: string): number | null {
-  const matches = [...text.matchAll(/\$\s?([\d,]+(?:\.\d+)?)/g)].map((m) =>
-    Number(m[1].replace(/,/g, ""))
-  );
-  const valid = matches.filter((n) => Number.isFinite(n) && n > 0);
-  return valid.length ? Math.max(...valid) : null;
+  // The contract value is the largest dollar figure that is NOT a
+  // limitation-of-liability / indemnity cap. Without this guard, a $2,000,000
+  // liability cap on a $180,000 subscription becomes totalValue — and totalValue
+  // is the downstream budget anchor and the invoice match key, so the wrong
+  // number propagates into BudgetIQ. Exclude any amount whose immediate lead-in
+  // is liability-cap language, then take the largest of what remains.
+  const CAP_LEADIN = /(liabilit|exceed|aggregate|ceiling|limited to|indemnif)/i;
+  const re = /\$\s?([\d,]+(?:\.\d+)?)/g;
+  const kept: number[] = [];
+  const all: number[] = [];
+  for (const m of text.matchAll(re)) {
+    const n = Number(m[1].replace(/,/g, ""));
+    if (!Number.isFinite(n) || n <= 0) continue;
+    all.push(n);
+    const lead = text.slice(Math.max(0, (m.index ?? 0) - 80), m.index ?? 0);
+    if (!CAP_LEADIN.test(lead)) kept.push(n);
+  }
+  if (kept.length) return Math.max(...kept);
+  // Only liability-cap amounts present (no separate fee/value stated): fall back
+  // to the largest figure rather than returning nothing.
+  return all.length ? Math.max(...all) : null;
 }
 
 // The vendor is the counterparty, never Iovance. The parties block lists the

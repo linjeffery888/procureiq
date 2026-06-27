@@ -87,7 +87,9 @@ function linkStyle(status: LinkStatus): { bg: string; fg: string; label: string 
 // one wide bar that runs back across its row. Take the first clause and cap it.
 function chipValue(found: string | null): string {
   if (!found) return "";
-  let v = found.split(/[;,]/)[0].trim();
+  // Split on the first clause boundary, but NOT on a comma that sits inside a
+  // number ("$250,000") — splitting there would render a $250,000 cap as "$250".
+  let v = found.split(/;|,(?!\d)/)[0].trim();
   if (v.length > 28) v = v.slice(0, 28).replace(/\s+\S*$/, "").trimEnd() + "…";
   else if (v.length < found.trim().length) v += "…";
   return v;

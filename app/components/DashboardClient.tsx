@@ -140,6 +140,9 @@ export default function DashboardClient() {
   const [records, setRecords] = useState<RecordLite[]>([]);
   const [actuals, setActuals] = useState<ActualLite[]>([]);
   const [corpus, setCorpus] = useState<CorpusLite | null>(null);
+  // The live budget the Financial Planning page runs off (data/budget.json), so
+  // the reforecast on this dashboard matches that page instead of the seed lines.
+  const [budget, setBudget] = useState<typeof BUDGET_LINES>([]);
   const [openBucket, setOpenBucket] = useState<string | null>("invoices");
 
   // Pull the live state every store exposes. Each is optional: the page renders
@@ -148,17 +151,19 @@ export default function DashboardClient() {
     let alive = true;
     (async () => {
       try {
-        const [t, r, a, c] = await Promise.all([
+        const [t, r, a, c, b] = await Promise.all([
           fetch("/api/triage").then((x) => (x.ok ? x.json() : null)).catch(() => null),
           fetch("/api/records").then((x) => (x.ok ? x.json() : null)).catch(() => null),
           fetch("/api/budget-actuals").then((x) => (x.ok ? x.json() : null)).catch(() => null),
           fetch("/api/corpus").then((x) => (x.ok ? x.json() : null)).catch(() => null),
+          fetch("/api/budget").then((x) => (x.ok ? x.json() : null)).catch(() => null),
         ]);
         if (!alive) return;
         if (t?.result?.results) setTriage(t.result as TriageResponse);
         if (Array.isArray(r?.records)) setRecords(r.records);
         if (Array.isArray(a?.actuals)) setActuals(a.actuals);
         if (c?.status) setCorpus(c.status);
+        if (Array.isArray(b?.lines)) setBudget(b.lines);
       } catch {
         /* keep the baseline */
       }
@@ -166,7 +171,7 @@ export default function DashboardClient() {
     return () => { alive = false; };
   }, []);
 
-  const m = useMemo(() => buildModel({ triage, records, actuals, corpus }), [triage, records, actuals, corpus]);
+  const m = useMemo(() => buildModel({ triage, records, actuals, corpus, budget }), [triage, records, actuals, corpus, budget]);
 
   return (
     <div className="pq-route">
@@ -389,9 +394,9 @@ export default function DashboardClient() {
 // ---------------------------------------------------------------------------
 // The model: every analytic computed from live state, with baseline fallbacks.
 // ---------------------------------------------------------------------------
-interface BuildInput { triage: TriageResponse | null; records: RecordLite[]; actuals: ActualLite[]; corpus: CorpusLite | null }
+interface BuildInput { triage: TriageResponse | null; records: RecordLite[]; actuals: ActualLite[]; corpus: CorpusLite | null; budget: typeof BUDGET_LINES }
 
-function buildModel({ triage, records, actuals, corpus }: BuildInput) {
+function buildModel({ triage, records, actuals, corpus, budget }: BuildInput) {
   const results: MatchResult[] = triage?.results?.length ? triage.results : BASELINE;
   const live = triage ? triage.meta.engine !== "offline-deterministic" : false;
   const total = results.length;
@@ -399,9 +404,14 @@ function buildModel({ triage, records, actuals, corpus }: BuildInput) {
   const exceptions = results.filter((r) => r.needsHuman);
   const reviewCount = results.filter((r) => r.status === "review").length;
 
-  // --- Budget reforecast (BUDGET_LINES + any uploaded actuals) ---
+  // --- Budget reforecast (live budget + any uploaded actuals) ---
+  // Run off the live budget the Financial Planning page uses (data/budget.json via
+  // /api/budget); fall back to the seed lines until it lands so the baseline render
+  // is never empty. This keeps the dashboard's net variance and over-plan count in
+  // agreement with the planning page instead of a stale 4-vendor seed.
+  const budgetLines = budget.length ? budget : BUDGET_LINES;
   const actualByVendor = new Map(actuals.map((a) => [a.vendorKey, a.amount]));
-  const reforecast = BUDGET_LINES.map((l) => {
+  const reforecast = budgetLines.map((l) => {
     const up = actualByVendor.get(normVendor(l.vendor));
     const folded = up != null && l.actualsToDate[CURRENT_MONTH] === 0;
     const actualsYtd = sum(l.actualsToDate) + (folded ? up! : 0);
