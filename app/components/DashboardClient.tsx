@@ -143,6 +143,7 @@ export default function DashboardClient() {
   // The live budget the Financial Planning page runs off (data/budget.json), so
   // the reforecast on this dashboard matches that page instead of the seed lines.
   const [budget, setBudget] = useState<typeof BUDGET_LINES>([]);
+  const [varianceOpen, setVarianceOpen] = useState(false); // collapse/expand the variance list
   const [openBucket, setOpenBucket] = useState<string | null>("invoices");
 
   // Pull the live state every store exposes. Each is optional: the page renders
@@ -240,7 +241,7 @@ export default function DashboardClient() {
           </div>
           <div style={cardSub}>projected end-of-year vs annual budget</div>
           <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 9 }}>
-            {m.varianceRows.map((v) => (
+            {(varianceOpen ? m.varianceRows : m.varianceRows.slice(0, 8)).map((v) => (
               <div key={v.vendor} style={{ display: "grid", gridTemplateColumns: "0.95fr 1.7fr 0.7fr", alignItems: "center", gap: 10 }}>
                 <div style={{ fontSize: 11, color: "#5a6675", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.short}</div>
                 <div style={{ position: "relative", height: 16, background: "#f4f6f8", borderRadius: 4 }}>
@@ -250,8 +251,14 @@ export default function DashboardClient() {
                 <div className="num" style={{ fontSize: 11, fontWeight: 600, textAlign: "right", color: v.color }}>{v.label}</div>
               </div>
             ))}
-            {m.varianceHidden > 0 && (
-              <div style={{ fontSize: 10.5, color: "#9aa3b0", marginTop: 4 }}>+{m.varianceHidden} more vendors · full list on Budget planning</div>
+            {m.varianceRows.length > 8 && (
+              <button
+                onClick={() => setVarianceOpen((o) => !o)}
+                style={{ marginTop: 6, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "7px 0 1px", background: "none", border: "none", borderTop: "1px solid #eef0f3", cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#5a6675" }}
+              >
+                {varianceOpen ? "Show top movers" : `Show all ${m.varianceRows.length} vendors`}
+                <span style={{ fontSize: 9, color: "#9aa3b0", transform: varianceOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
+              </button>
             )}
           </div>
         </div>
@@ -450,14 +457,12 @@ function buildModel({ triage, records, actuals, corpus, budget }: BuildInput) {
   const contractTypes = ctCounts.map((t) => ({ type: t.type, n: t.n, color: t.color, h: Math.round((t.n / ctMax) * 100) }));
   const ctSum = ctCounts.reduce((a, t) => a + t.n, 0);
 
-  // --- Budget variance bars (centered at 0). Show only the biggest movers on
-  //     this glance card; the full 37-vendor list lives on Budget Planning, and
-  //     rendering all of them here makes the card run off-screen (and leaves the
-  //     neighbouring chart card stretched with empty space). ---
-  const topMovers = [...reforecast].sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance)).slice(0, 9);
-  const varianceHidden = Math.max(0, reforecast.length - topMovers.length);
-  const maxAbs = Math.max(...topMovers.map((r) => Math.abs(r.variance)), 1);
-  const varianceRows = topMovers.map((r) => {
+  // --- Budget variance bars (centered at 0), biggest movers first. The glance
+  //     card shows a handful collapsed and expands to the full 37 on demand
+  //     (toggle in the render), so it never runs off-screen by default. ---
+  const sortedVariance = [...reforecast].sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
+  const maxAbs = Math.max(...sortedVariance.map((r) => Math.abs(r.variance)), 1);
+  const varianceRows = sortedVariance.map((r) => {
     const frac = Math.abs(r.variance) / maxAbs;
     const half = frac * 50;
     const over = r.variance > 0;
@@ -571,7 +576,7 @@ function buildModel({ triage, records, actuals, corpus, budget }: BuildInput) {
 
   return {
     quarterLabel: "Q2 FY26 close in progress", live,
-    kpis, ctTotal: ctSum, contractTypes, varianceRows, varianceHidden,
+    kpis, ctTotal: ctSum, contractTypes, varianceRows,
     outcomeDonut, outcomePct, outcomeLegend,
     triageDonut, triagePct, triageTotal: total, triageLegend,
     exceptionReasons, buckets,
