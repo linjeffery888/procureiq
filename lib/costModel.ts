@@ -97,12 +97,12 @@ export function contractReview(a = assumptionsToMap(contractAssumptions)): Contr
 // BUDGETIQ: invoice / PO matching
 // =====================================================================
 export const invoiceAssumptions: Assumption[] = [
-  { key: "invoicesPerMonth", label: "IT invoices / month", value: 300, unit: "invoices", source: "verified", note: "Ben: 'we get hundreds,' IT is highest-volume group. Modeled at 300." },
-  { key: "apMinutesPerInvoice", label: "AP minutes to match one invoice", value: 6, unit: "minutes", source: "estimate", note: "Manual lookup of PO + work order, match, code. Ben deferred exact number." },
+  { key: "invoicesPerMonth", label: "IT invoices / month", value: 250, unit: "invoices", source: "verified", note: "Ben: 'we get hundreds,' IT is the highest-volume group. Modeled at ~3,000 / yr (250 / mo)." },
+  { key: "apMinutesPerInvoice", label: "AP minutes to match one invoice", value: 5, unit: "minutes", source: "estimate", note: "Manual lookup of PO + work order, match, code. Ben deferred the exact number." },
   { key: "approverMinutesPerInvoice", label: "Approver minutes per invoice", value: 4, unit: "minutes", source: "estimate", note: "Ben personally hunts down PO/work order before approving." },
-  { key: "automationRate", label: "Share auto-matched with no human touch", value: 0.8, unit: "fraction", source: "estimate", note: "Ben: ~80% are clean matches today." },
-  { key: "mismatchRate", label: "Share that hit the wrong bucket", value: 0.1, unit: "fraction", source: "estimate", note: "Drives downstream reforecasting rework." },
-  { key: "reworkHoursPerMismatch", label: "Rework hours per mismatch", value: 0.75, unit: "hours", source: "estimate", note: "Surfaces during reforecasting, then traced back and corrected." },
+  { key: "automationRate", label: "Share auto-matched with no human touch", value: 0.8, unit: "fraction", source: "verified", note: "Ben: ~80% are clean matches today; the AI lift takes the matched share toward ~85%." },
+  { key: "mismatchRate", label: "Share that hit the wrong bucket", value: 0.2, unit: "fraction", source: "assumption", note: "Ben: ~20% land in the wrong bucket, driving downstream reforecasting rework." },
+  { key: "reworkHoursPerMismatch", label: "Rework hours per mismatch", value: 0.5, unit: "hours", source: "estimate", note: "Surfaces during reforecasting, then traced back and corrected." },
 ];
 
 export interface InvoiceResult {
@@ -140,7 +140,7 @@ export const financeAssumptions: Assumption[] = [
   { key: "leadCount", label: "Function leads doing reforecast", value: 7, unit: "people", source: "verified", note: "Ben's org: commercial, R&D, G&A, Salesforce, infra/security, data, CSV." },
   { key: "leadHoursPerQuarter", label: "Hours per lead per quarter", value: 2.5, unit: "hours", source: "verified", note: "Ben: '2 to 3 hours' each." },
   { key: "ownerDaysPerQuarter", label: "Owner (Ben) days per quarter", value: 1.5, unit: "days", source: "verified", note: "Ben: 'a good day or two' at quarter-end." },
-  { key: "accrualMeetingHoursPerQuarter", label: "Accrual meeting hours / quarter", value: 9, unit: "hours", source: "estimate", note: "Ben: 3 meetings of ~3 hrs around quarter close." },
+  { key: "accrualMeetingHoursPerQuarter", label: "Accrual meeting hours / quarter", value: 6, unit: "hours", source: "estimate", note: "Ben: two ~3-hour blocks around quarter close." },
   { key: "automationRate", label: "Share of re-keying AI eliminates", value: 0.6, unit: "fraction", source: "estimate", note: "Auto-pull actuals, auto-draft accruals from payment schedules." },
 ];
 
