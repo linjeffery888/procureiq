@@ -211,22 +211,26 @@ export default function DashboardClient() {
       </div>
 
       {/* Row 1: bar charts */}
-      <div style={{ marginTop: 13, display: "grid", gridTemplateColumns: "1fr 1.25fr", gap: 14, alignItems: "start" }}>
-        {/* contracts ingested by type */}
-        <div style={{ ...card, padding: "16px 18px" }}>
+      <div style={{ marginTop: 13, display: "grid", gridTemplateColumns: "1fr 1.25fr", gap: 14, alignItems: "stretch" }}>
+        {/* contracts ingested by type — flex column so the chart centers in the
+            card and the card matches the variance card's height (capped so an
+            expanded variance list doesn't stretch this one absurdly tall). */}
+        <div style={{ ...card, padding: "16px 18px", display: "flex", flexDirection: "column", maxHeight: 360 }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
             <div style={cardLabel}>Contracts ingested by type</div>
             <div className="num" style={{ fontSize: 11.5, color: "#7a8493" }}>{m.ctTotal} total</div>
           </div>
           <div style={cardSub}>trailing 90 days, modeled from discovery volume</div>
-          <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: `repeat(${m.contractTypes.length},1fr)`, gap: 12, alignItems: "end", height: 116 }}>
-            {m.contractTypes.map((t) => (
-              <div key={t.type} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
-                <div className="num" style={{ fontSize: 11.5, fontWeight: 600, color: "#2a3645", marginBottom: 5 }}>{t.n}</div>
-                <div style={{ width: "72%", maxWidth: 34, height: `${t.h}%`, minHeight: 4, borderRadius: "4px 4px 0 0", background: t.color }} />
-                <div style={{ fontSize: 10, color: "#7a8493", marginTop: 7, textAlign: "center", lineHeight: 1.25 }}>{t.type}</div>
-              </div>
-            ))}
+          <div style={{ flex: 1, display: "flex", alignItems: "center", marginTop: 18 }}>
+            <div style={{ width: "100%", display: "grid", gridTemplateColumns: `repeat(${m.contractTypes.length},1fr)`, gap: 12, alignItems: "end", height: 116 }}>
+              {m.contractTypes.map((t) => (
+                <div key={t.type} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
+                  <div className="num" style={{ fontSize: 11.5, fontWeight: 600, color: "#2a3645", marginBottom: 5 }}>{t.n}</div>
+                  <div style={{ width: "72%", maxWidth: 34, height: `${t.h}%`, minHeight: 4, borderRadius: "4px 4px 0 0", background: t.color }} />
+                  <div style={{ fontSize: 10, color: "#7a8493", marginTop: 7, textAlign: "center", lineHeight: 1.25 }}>{t.type}</div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
