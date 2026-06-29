@@ -210,7 +210,7 @@ export default function DashboardClient() {
       </div>
 
       {/* Row 1: bar charts */}
-      <div style={{ marginTop: 13, display: "grid", gridTemplateColumns: "1fr 1.25fr", gap: 14 }}>
+      <div style={{ marginTop: 13, display: "grid", gridTemplateColumns: "1fr 1.25fr", gap: 14, alignItems: "start" }}>
         {/* contracts ingested by type */}
         <div style={{ ...card, padding: "16px 18px" }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
@@ -250,6 +250,9 @@ export default function DashboardClient() {
                 <div className="num" style={{ fontSize: 11, fontWeight: 600, textAlign: "right", color: v.color }}>{v.label}</div>
               </div>
             ))}
+            {m.varianceHidden > 0 && (
+              <div style={{ fontSize: 10.5, color: "#9aa3b0", marginTop: 4 }}>+{m.varianceHidden} more vendors · full list on Budget planning</div>
+            )}
           </div>
         </div>
       </div>
@@ -447,9 +450,14 @@ function buildModel({ triage, records, actuals, corpus, budget }: BuildInput) {
   const contractTypes = ctCounts.map((t) => ({ type: t.type, n: t.n, color: t.color, h: Math.round((t.n / ctMax) * 100) }));
   const ctSum = ctCounts.reduce((a, t) => a + t.n, 0);
 
-  // --- Budget variance bars (centered at 0) ---
-  const maxAbs = Math.max(...reforecast.map((r) => Math.abs(r.variance)), 1);
-  const varianceRows = reforecast.map((r) => {
+  // --- Budget variance bars (centered at 0). Show only the biggest movers on
+  //     this glance card; the full 37-vendor list lives on Budget Planning, and
+  //     rendering all of them here makes the card run off-screen (and leaves the
+  //     neighbouring chart card stretched with empty space). ---
+  const topMovers = [...reforecast].sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance)).slice(0, 9);
+  const varianceHidden = Math.max(0, reforecast.length - topMovers.length);
+  const maxAbs = Math.max(...topMovers.map((r) => Math.abs(r.variance)), 1);
+  const varianceRows = topMovers.map((r) => {
     const frac = Math.abs(r.variance) / maxAbs;
     const half = frac * 50;
     const over = r.variance > 0;
@@ -563,7 +571,7 @@ function buildModel({ triage, records, actuals, corpus, budget }: BuildInput) {
 
   return {
     quarterLabel: "Q2 FY26 close in progress", live,
-    kpis, ctTotal: ctSum, contractTypes, varianceRows,
+    kpis, ctTotal: ctSum, contractTypes, varianceRows, varianceHidden,
     outcomeDonut, outcomePct, outcomeLegend,
     triageDonut, triagePct, triageTotal: total, triageLegend,
     exceptionReasons, buckets,
